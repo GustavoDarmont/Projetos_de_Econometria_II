@@ -1,0 +1,112 @@
+---
+title: "Lista 2 - Econometria 2"
+author: "Augusto Floriano, Danyel Lima, Fernando Soares e Gustavo Darmont"
+date: "2025-09-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, fig.align="center")
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, knitr, zoo, lubridate)
+```
+
+# Questão 1: Asset Pricing
+
+## (a) 
+
+### Carregando e Tratando os Dados
+
+```{r DADOS, include=FALSE}
+## DADOS DE FAMA-FRENCH:
+
+# Importação dos Dados
+ff_raw <- read_csv("Developed_25_Portfolios_ME_BE-ME.csv", skip = 20)
+
+# Limpeza e Tratamento Mensal
+ff_monthly <- ff_raw %>%
+  rename(Date = `...1`) %>%
+  filter(!is.na(Date), !str_detect(Date, "Copyright")) %>%
+  mutate(Date = ymd(paste0(Date, "01"))) %>%
+  mutate(across(-Date, as.numeric))
+
+# Conversão para Trimestral (compondo os retornos)
+ff_quarterly <- ff_monthly %>%
+  mutate(YearQuarter = as.yearqtr(Date)) %>%
+  group_by(YearQuarter) %>%
+  summarise(across(
+    .cols = -Date,
+    .fns = ~ (prod(1 + .x / 100, na.rm = TRUE) - 1) * 100
+  )) %>%
+  ungroup()
+
+
+## DADOS DE CONSUMO:
+
+# Importação dos Dados de Consumo Real de Não-Duráveis
+bea_raw <- read_csv("Table 2.3.6. Real Personal Consumption Expenditures by Major Type of Product, Chained Dollars.csv", skip = 3)
+
+# Limpeza e Transformação
+nondurables_quarterly <- bea_raw %>%
+  filter(Line == 8) %>%
+  select(contains("Q")) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Quarter",
+    values_to = "Nondurables_Real"
+  ) %>%
+  mutate(
+    YearQuarter = as.yearqtr(Quarter, format = "%YQ%q"),
+    Nondurables_Real = as.numeric(Nondurables_Real)
+  )
+
+
+# Cálculo do Crescimento do Consumo
+# O cálculo abaixo é do crescimento do consumo agregado real. É preciso de uma série de POPULAÇÃO do BEA para fazer o cálculo per-capita
+# O código seria:
+# 1. Carregar a série de população trimestral (ex: `pop_data`).
+# 2. Fazer um left_join: `nondurables_quarterly <- nondurables_quarterly %>% left_join(pop_data, by = "YearQuarter")`
+# 3. Criar a variável per capita: `mutate(Nondurables_Real_PC = Nondurables_Real / Population)`
+# 4. Calcular o crescimento com base na nova variável.
+
+# Por enquanto, calcularemos o crescimento com a série agregada.
+consumption_growth <- nondurables_quarterly %>%
+  arrange(YearQuarter) %>%
+  mutate(
+    # consumption_growth = log(C_t) - log(C_{t-1})
+    consumption_growth = log(Nondurables_Real) - lag(log(Nondurables_Real))
+  )
+
+
+## JUNÇÃO DAS BASES E PREPARAÇÃO FINAL
+final_data <- ff_quarterly %>%
+  left_join(consumption_growth, by = "YearQuarter") %>%
+  # A lista menciona 2025Q11, provavelmente um erro de digitação para 2025Q1. Ajuste se necessário.
+  filter(YearQuarter >= as.yearqtr("1947 Q1") & YearQuarter <= as.yearqtr("2025 Q1"))
+
+# 3.2. Observação sobre o Equity Premium
+# Para os itens seguintes, você precisará calcular o "equity premium" (excesso de retorno).
+# Para isso, é necessário a taxa de juro livre de risco (Risk-Free Rate, RF).
+# Você pode baixar o arquivo "Fama/French 3 Factors" do site do Kenneth French,
+# que contém a coluna RF. O processo seria:
+# 1. Carregar o arquivo dos fatores.
+# 2. Converter a coluna RF mensal para trimestral (compondo-a como fizemos com os retornos).
+# 3. Fazer um `left_join` para adicionar a RF trimestral à base `final_data`.
+# 4. Subtrair a RF de cada uma das 25 colunas de portfólio.
+# Exemplo: `final_data_premium <- final_data %>% mutate(across(SMALL LoBM:BIG HiBM, ~ .x - RF_trimestral))`
+
+#-----------------------------------------------------------------------
+# PARTE 4: VISUALIZAÇÃO DOS DADOS FINAIS
+#-----------------------------------------------------------------------
+# Ao executar este chunk, o RStudio mostrará o início e o fim da sua base de dados final.
+cat("Base de dados final pronta para análise!\n\n")
+cat("Dimensões:", dim(final_data), "\n")
+cat("Período:", as.character(min(final_data$YearQuarter)), "a", as.character(max(final_data$YearQuarter)), "\n\n")
+
+cat("Cabeçalho da base de dados:\n")
+head(final_data)
+```
+
+## (b)
+
