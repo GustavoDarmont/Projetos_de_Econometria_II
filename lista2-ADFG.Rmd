@@ -46,14 +46,19 @@ ff_monthly_real <- ff_monthly %>%
   filter(!is.na(Inflation_pct))
 
 # 3. Conversão para Trimestral (compondo os retornos com o componente inflacionário)
+safe_prod <- function(x) {
+  if (all(is.na(x))) return(NA_real_)
+  prod(1 + x/100, na.rm = TRUE)
+}
+
 ff_quarterly_real <- ff_monthly_real %>%
   mutate(YearQuarter = as.yearqtr(Date)) %>%
   group_by(YearQuarter) %>%
   summarise(
     across(
       .cols = -c(Date, Inflation_pct),
-      .fns = ~ ((prod(1 + .x / 100, na.rm = TRUE) / prod(1 + Inflation_pct / 100, na.rm = TRUE)) - 1) * 100
-    ),comp_inflation_quarterly = (prod(1 + Inflation_pct / 100, na.rm = TRUE) - 1) * 100
+      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1) * 100
+    ),comp_inflation_quarterly = (safe_prod(Inflation_pct) - 1) * 100
   ) %>%
   ungroup()
 
@@ -227,7 +232,7 @@ rf_quarterly <- factors_monthly %>%
   mutate(YearQuarter = as.yearqtr(Date)) %>%
   group_by(YearQuarter) %>%
   summarise(
-    RF_quarterly = (prod(1 + RF / 100, na.rm = TRUE) - 1) * 100
+    RF_quarterly = (safe_prod(RF) - 1) * 100
   ) %>%
   ungroup()
 
@@ -239,23 +244,40 @@ final_data <- ff_quarterly_real %>%
   left_join(consumption_final, by = "YearQuarter") %>%
   left_join(rf_quarterly, by = "YearQuarter")
 
-# 2. Criar o Dataframe Final de Análise
+# 2. Calcular a Taxa Livre de Risco Real (deflacionada)
+# Unindo os dados de inflação com os de RF
+rf_data_with_inflation <- rf_quarterly %>%
+  left_join(ff_quarterly_real %>% select(YearQuarter, comp_inflation_quarterly), by = "YearQuarter")
+
+# Calculando a RF real
+rf_real_quarterly <- rf_data_with_inflation %>%
+  mutate(
+    RF_real_quarterly = (( (1 + RF_quarterly / 100) / (1 + comp_inflation_quarterly / 100) ) - 1) * 100
+  ) %>%
+  select(YearQuarter, RF_real_quarterly)
+
+# 3. Unir a RF Real aos dados finais
+final_data <- ff_quarterly_real %>%
+  left_join(consumption_final, by = "YearQuarter") %>%
+  left_join(rf_real_quarterly, by = "YearQuarter") # Use a nova tabela de RF real
+
+# 4. Criar o Dataframe Final de Análise
 analysis_df <- final_data %>%
-  # 2.1 Calcular o excesso de retorno (prêmio de risco) para cada portfólio
+  # Calcular o excesso de retorno (prêmio de risco) para cada portfólio
   mutate(across(
     .cols = starts_with("SMALL") | starts_with("ME") | starts_with("BIG"),
-    .fns = ~ .x - RF_quarterly,
+    .fns = ~ .x - RF_real_quarterly,
     .names = "{.col}_excess"
   )) %>%
-  # 2.2 Calcular o SDF
+  # Calcular o SDF
   mutate(
     gross_consumption_growth = exp(consumption_growth_pc),
     SDF = 0.99 * (gross_consumption_growth ^ -2)
   ) %>%
-  # 2.3 Remover a primeira linha que tem NA no SDF (devido ao lag do crescimento)
+  # Remover a primeira linha que tem NA no SDF (devido ao lag do crescimento)
   filter(!is.na(SDF))
 
-# 3. Calcular o Prêmio de Risco Estimado pelo Modelo
+# 5. Calcular o Prêmio de Risco Estimado pelo Modelo
 mean_sdf <- mean(analysis_df$SDF, na.rm = TRUE)
 
 model_premiums <- analysis_df %>%
@@ -296,12 +318,12 @@ factors_quarterly_real <- factors_monthly_real %>%
   summarise(
     across(
       .cols = c(`Mkt-RF`, RF),
-      .fns = ~ ((prod(1 + .x / 100, na.rm = TRUE) / prod(1 + Inflation_pct / 100, na.rm = TRUE)) - 1) * 100,
+      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1) * 100,
       .names = "{.col}_real"
     ),
-    `Mkt-RF` = (prod(1 + `Mkt-RF` / 100, na.rm = TRUE) - 1) * 100,
-    SMB = (prod(1 + SMB / 100, na.rm = TRUE) - 1) * 100,
-    HML = (prod(1 + HML / 100, na.rm = TRUE) - 1) * 100
+    `Mkt-RF` = (safe_prod(`Mkt-RF`) - 1) * 100,
+    SMB = (safe_prod(SMB) - 1) * 100,
+    HML = (safe_prod(HML) - 1) * 100
   ) %>%
   ungroup()
 
