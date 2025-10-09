@@ -503,7 +503,7 @@ fit2<-Arima(y,order=c(1,1,0),seasonal=list(order=c(0,0,1),period=12),include.dri
 summary(fit1);summary(fit2)
 ```
 
-Estimados os dois modelos, podemos observar valores muito próximos nos testes de AIC e BIC, mas o modelo com termo AR sazonal apresenta um valor substancialmente menor em ambos os testes, sendo esse o modelo mais indicado com base nos dois testes.
+Estimados os dois modelos, podemos observar valores muito próximos nos testes de AIC e BIC, mas o modelo com termo AR sazonal apresenta um valor menor em ambos os testes, sendo esse o modelo marginalmente superior com base nos dois testes.
 
 ```{r}
 plres<-function(f,t){
@@ -532,3 +532,60 @@ rbind("(1,1,0)(1,0,0)[12]"=lb(fit1,2),
 ```
 
 Os testes de Ljung-box para os lags $24$ e $36$ apresentaram p-valores superiores a $5\%$, o que indica ausênsia de correlação residual, e então que os modelos estão capturando adequadamente a estrutura temporal da série, sem restar um padrão sistemático claro dos erros aparentemente.
+
+##c)
+
+
+```{r}
+
+train_data <- window(y, end = c(2023, 1))
+
+h <- 24 
+
+
+forecasts_fit1 <- numeric(h)
+forecasts_fit2 <- numeric(h)
+
+
+for(i in 1:h){
+  
+  train_window <- window(y, end = time(train_data)[length(train_data)] + (i-1)/12)
+  
+  
+  refit1 <- Arima(train_window, model=fit1) 
+  refit2 <- Arima(train_window, model=fit2)
+  
+ 
+  forecasts_fit1[i] <- forecast(refit1, h=1)$mean
+  forecasts_fit2[i] <- forecast(refit2, h=1)$mean
+}
+
+
+forecasts1_ts <- ts(forecasts_fit1, start = c(2023, 2), frequency = 12)
+forecasts2_ts <- ts(forecasts_fit2, start = c(2023, 2), frequency = 12)
+
+observed_test <- window(y, start = c(2023, 2))
+
+p_forecast <- autoplot(window(y, start=c(2022,1)), series="Observado") +
+  autolayer(forecasts1_ts, series="SARIMA(1,1,0)(1,0,0)[12]") +
+  autolayer(forecasts2_ts, series="SARIMA(1,1,0)(0,0,1)[12]") +
+  theme_classic() +
+  ggtitle("Previsões Passo a Passo vs. Dados Observados") +
+  labs(x="Data", y="Log do IPCA", color="Série")
+
+ggplotly(p_forecast) %>%
+  layout(plot_bgcolor="white", paper_bgcolor="white")
+
+rmse_fit1 <- accuracy(forecasts1_ts, observed_test)["Test set","RMSE"]
+rmse_fit2 <- accuracy(forecasts2_ts, observed_test)["Test set","RMSE"]
+
+rmse_table <- data.frame(
+  Modelo = c("SARIMA(1,1,0)(1,0,0)[12]", "SARIMA(1,1,0)(0,0,1)[12]"),
+  RMSE = c(rmse_fit1, rmse_fit2)
+)
+
+print(kable(rmse_table, caption = "Comparativo do Erro Quadrático Médio da Previsão (RMSE)"))
+```
+As estimações apresentaram resultados extremamente similares para os dois modelos, tanto que graficamente parecem idênticos, porém, analisando ponto a ponto é possível notar que como esperado os modelos apresentaram resultados marginalmente diferentes. Isso pode ser explicado pela similaridade teórica entre os modelos AR e MA e pelo valor absoluto pequeno do coeficiente sazonal em ambos os modelos, que acaba tornando ainda menor a diferença entre os modelos.
+
+Apesar da similaridade gráfica, nos testes de previsão o modelo MA sazonal apresentou um RMSE marginalmente menor, dessa forma é o modelo que apresentou previsões mais próximas da realidade. Note que para previsões o modelo considerado melhor é diferente daquele via AIC/BIC, oque indica que o modelo mais "ajustado" não é necessariamente o mais adequado para previsões.
