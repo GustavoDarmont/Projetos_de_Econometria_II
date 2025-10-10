@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align="center")
 
 if (!require("pacman")) install.packages("pacman")
-pacman::p_load(tidyverse, knitr, zoo, lubridate, broom, ipeadatar, dplyr, ggplot2, forecast, tseries, urca, plotly)
+pacman::p_load(tidyverse, knitr, zoo, lubridate, broom, ipeadatar, dplyr, ggplot2, forecast, tseries, urca, plotly, writexl)
 ```
 
 # Questão 1: Asset Pricing
@@ -24,20 +24,20 @@ ff_raw <- read_csv("25_Portfolios_5x5.csv", skip = 15)
 
 # 2. Limpeza e Tratamento Mensal
 ff_monthly <- ff_raw %>%
-  rename(Date = `...1`) %>%
+  set_names(replace(names(.), 1, "Date")) %>%
   filter(!is.na(Date), !str_detect(Date, "Copyright")) %>%
   mutate(Date = ymd(paste0(Date, "01"))) %>%
-  mutate(across(-Date, as.numeric))
+  mutate(across(-Date, ~ as.numeric(.x)/100))
 
 # Carregar e preparar os dados de CPI
-cpi_raw <- read_csv("CPIAUCNS.csv")
+cpi_raw <- read_csv("CPIAUCSL.csv")
 
 # Cálculo do componente inflacionário
 cpi_monthly <- cpi_raw %>%
-  rename(CPI = CPIAUCNS) %>%
+  rename(CPI = CPIAUCSL) %>%
   mutate(Date = ymd(observation_date)) %>%
   arrange(Date) %>%
-  mutate(Inflation_pct = (CPI / lag(CPI) - 1) * 100) %>%
+  mutate(Inflation_pct = ((CPI / lag(CPI)) - 1)) %>%
   select(Date, Inflation_pct)
 
 # Adicionando o CPI ao dataframe
@@ -48,22 +48,26 @@ ff_monthly_real <- ff_monthly %>%
 # 3. Conversão para Trimestral (compondo os retornos com o componente inflacionário)
 safe_prod <- function(x) {
   if (all(is.na(x))) return(NA_real_)
-  prod(1 + x/100, na.rm = TRUE)
+  prod(1 + x, na.rm = TRUE)
 }
 
 ff_quarterly_real <- ff_monthly_real %>%
   mutate(YearQuarter = as.yearqtr(Date)) %>%
   group_by(YearQuarter) %>%
   summarise(
+    comp_inflation_quarterly = safe_prod(Inflation_pct) - 1,
     across(
       .cols = -c(Date, Inflation_pct),
-      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1) * 100
-    ),comp_inflation_quarterly = (safe_prod(Inflation_pct) - 1) * 100
+      .fns = ~ (safe_prod(.x) / safe_prod(Inflation_pct)) - 1
+      )
   ) %>%
   ungroup()
 
-head(ff_quarterly_real)
+cat("Dataframe 'ff_quarterly_real' salvo com sucesso como ff_quarterly_real.xlsx\n")
 
+ff_quarterly_real %>%
+  mutate(comp_inflation_quarterly = round(comp_inflation_quarterly, 2)) %>%
+  tail()
 
 ## DADOS DE CONSUMO:
 
@@ -222,17 +226,17 @@ factors_raw <- read_csv("F-F_Research_Data_Factors.csv", skip = 3)
 
 # 2. Limpeza e Tratamento Mensal
 factors_monthly <- factors_raw %>%
-  rename(Date = `...1`) %>%
+  set_names(replace(names(.), 1, "Date")) %>%
   filter(!is.na(Date)) %>%
   mutate(Date = ymd(paste0(Date, "01"))) %>%
-  mutate(across(-Date, as.numeric))
+  mutate(across(-Date, ~ as.numeric(.x)/100))
 
 # 3. Conversão da RF para Trimestral (compondo a taxa)
 rf_quarterly <- factors_monthly %>%
   mutate(YearQuarter = as.yearqtr(Date)) %>%
   group_by(YearQuarter) %>%
   summarise(
-    RF_quarterly = (safe_prod(RF) - 1) * 100
+    RF_quarterly = (safe_prod(RF) - 1)
   ) %>%
   ungroup()
 
@@ -252,7 +256,7 @@ rf_data_with_inflation <- rf_quarterly %>%
 # Calculando a RF real
 rf_real_quarterly <- rf_data_with_inflation %>%
   mutate(
-    RF_real_quarterly = (( (1 + RF_quarterly / 100) / (1 + comp_inflation_quarterly / 100) ) - 1) * 100
+    RF_real_quarterly = (( (1 + RF_quarterly) / (1 + comp_inflation_quarterly) ) - 1)
   ) %>%
   select(YearQuarter, RF_real_quarterly)
 
@@ -284,7 +288,7 @@ model_premiums <- analysis_df %>%
   summarise(across(
     .cols = ends_with("_excess"),
     .fns = ~ -cov(SDF, .x, use = "complete.obs") / mean_sdf,
-    .names = "model_{.col}"
+    .names = "{.col}"
   ))
 
 model_premiums_long <- model_premiums %>%
@@ -303,7 +307,7 @@ print(model_premiums_long, n = 25)
 factors_monthly_raw <- read_csv("F-F_Research_Data_Factors.csv", skip = 3)
 
 factors_monthly <- factors_monthly_raw %>%
-  rename(Date = `...1`) %>%
+  set_names(replace(names(.), 1, "Date")) %>%
   filter(!is.na(Date), !str_detect(Date, "Copyright")) %>%
   mutate(Date = ymd(paste0(Date, "01"))) %>%
   mutate(across(-Date, as.numeric))
@@ -318,12 +322,12 @@ factors_quarterly_real <- factors_monthly_real %>%
   summarise(
     across(
       .cols = c(`Mkt-RF`, RF),
-      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1) * 100,
+      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1),
       .names = "{.col}_real"
     ),
-    `Mkt-RF` = (safe_prod(`Mkt-RF`) - 1) * 100,
-    SMB = (safe_prod(SMB) - 1) * 100,
-    HML = (safe_prod(HML) - 1) * 100
+    `Mkt-RF` = (safe_prod(`Mkt-RF`) - 1),
+    SMB = (safe_prod(SMB) - 1),
+    HML = (safe_prod(HML) - 1)
   ) %>%
   ungroup()
 
@@ -442,93 +446,3 @@ cat("\n\n--- Prêmio de Risco Trimestral Estimado pelo Modelo de 3 Fatores\n")
 print(three_factor_premiums, n = 25)
 ```
 
-
-# 2.
-
-```{r}
-ipca<-ipeadata("PRECOS12_IPCA12")%>%filter(date>=as.Date("2000-01-01"),date<=as.Date("2025-01-01"))%>%arrange(date)
-saveRDS(ipca,"ipca_precos12_2000_2025.rds");write.csv(ipca,"ipca_precos12_2000_2025.csv",row.names=FALSE)
-```
-
-## a)
-
-```{r}
-ipca<-readRDS("ipca_precos12_2000_2025.rds");s<-ts(ipca$value,start=c(2000,1),frequency=12)
-summary(ipca$value);c(mean=mean(ipca$value),sd=sd(ipca$value),min=min(ipca$value),max=max(ipca$value))
-ggplotly(autoplot(s)+theme_classic()+ggtitle("IPCA - Índice (2000-2025)"))%>%layout(plot_bgcolor="white",paper_bgcolor="white",yaxis=list(rangemode="tozero"))
-ggplotly(autoplot(log(s))+theme_classic()+ggtitle("Log do IPCA"))%>%layout(plot_bgcolor="white",paper_bgcolor="white",yaxis=list(rangemode="tozero"))
-ggplotly(autoplot(diff(log(s)))+theme_classic()+ggtitle("Δlog(IPCA)"))%>%layout(plot_bgcolor="white",paper_bgcolor="white",yaxis=list(rangemode="tozero"))
-```
-
-Pode-se observar uma notável tendência de crescimento do IPCA tanto em nível quanto em log, enquanto o comportamento dos dados em diferença do log apresentam um comportamento mais oscilatório, sem tendência clara de crescimento e se aproximando um pouco mais de um ruído branco.
-
-```{r}
-adf.test(s);pp.test(s)
-```
-
-Pode-se observar que os testes não rejeitam a hipótese nula de raiz unitária, dado o elevado p-valor dos testes, o que indica uma iminente tendência estocástica e não-estacionariedade, conforme indicado pelos gráficos.
-
-```{r}
-adf.test(log(s));pp.test(log(s))
-```
-
-Assim como em nível, em log se observa um p-valor elevado, com os testes não rejeitando a hipótese nula de raiz unitária, indicando novamente tendência estocástica e não-estacionariedade
-
-```{r}
-adf.test(diff(log(s)));pp.test(diff(log(s)))
-```
-
-Para os dados em diferença do log, observa-se um p-valor consideravelmente menor, rejeitando a hipótese nula de raiz unitária e indicando estacionariedade.
-
-```{r}
-d<-diff(log(s));a<-acf(d,plot=FALSE,na.action=na.pass);p<-pacf(d,plot=FALSE,na.action=na.pass);ci<-qnorm(0.975)/sqrt(a$n.used)
-xa<-as.numeric(a$lag)*12;ya<-as.numeric(a$acf);xp<-as.numeric(p$lag)*12;yp<-as.numeric(p$acf)
-plot_ly(x=xa,y=ya,type="bar")%>%layout(title="ACF Δlog(IPCA)",plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=-ci,y1=-ci)))
-plot_ly(x=xp,y=yp,type="bar")%>%layout(title="PACF Δlog(IPCA)",plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=-ci,y1=-ci)))
-```
-
-Enquanto na PACF não se observa nenhum lag significativo, com todos os lags após o lag nulo se mantendo dentro do intervalo de confiança, pode-se assumir que as partes de média móvel sejam 0 tanto no aspecto não-sazonal quanto no sazonal, com possivelmente $q=Q=0$.
-
-Contudo, analisando a ACF, é possível observar um decaimento gradual após o lag 0 e além disso um comportamento de crescimento após um ano, indicando um possível fator AR tanto sazonal quanto não-sazonal, indicando possivelmente que $p=P=1$.
-
-Dessa forma, o modelo que tende a ser o mais adequado para o IPCA é o $SARIMA(1,1,0)(1,0,0)_{12}$.
-
-## b)
-
-```{r}
-library(forecast);library(plotly)
-y<-log(s)
-fit1<-Arima(y,order=c(1,1,0),seasonal=list(order=c(1,0,0),period=12),include.drift=FALSE,method="ML")
-fit2<-Arima(y,order=c(1,1,0),seasonal=list(order=c(0,0,1),period=12),include.drift=FALSE,method="ML")
-summary(fit1);summary(fit2)
-```
-
-Estimados os dois modelos, podemos observar valores muito próximos nos testes de AIC e BIC, mas o modelo com termo AR sazonal apresenta um valor substancialmente menor em ambos os testes, sendo esse o modelo mais indicado com base nos dois testes.
-
-```{r}
-plres<-function(f,t){
-  r<-na.omit(residuals(f));ix<-seq_along(r)
-  a<-acf(r,plot=FALSE);p<-pacf(r,plot=FALSE);ci<-qnorm(0.975)/sqrt(a$n.used)
-  xa<-as.numeric(a$lag)*12;ya<-as.numeric(a$acf);xp<-as.numeric(p$lag)*12;yp<-as.numeric(p$acf)
-  rt<-plot_ly(x=ix,y=as.numeric(r),type="scatter",mode="lines")%>%layout(title=paste0("Resíduos - ",t),plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Índice temporal"),yaxis=list(title="Resíduo",rangemode="tozero"))
-  ac<-plot_ly(x=xa,y=ya,type="bar")%>%layout(title=paste0("ACF dos resíduos - ",t),plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=-ci,y1=-ci)))
-  pc<-plot_ly(x=xp,y=yp,type="bar")%>%layout(title=paste0("PACF dos resíduos - ",t),plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=-ci,y1=-ci)))
-  list(rt=rt,ac=ac,pc=pc)
-}
-g1<-plres(fit1,"SARIMA(1,1,0)(1,0,0)[12]")
-g2<-plres(fit2,"SARIMA(1,1,0)(0,0,1)[12]")
-g1$rt;g2$rt
-g1$ac;g2$ac
-g1$pc;g2$pc
-```
-
-Dado que os dois modelos tem coeficientes próximos, é esperado um desempenho similar dos gráficos de resíduos, algo que de fato ocorre, com ambos aproximando-se de um ruído branco. Em ambos os modelos se observa um decaimento após o lag 0 com os lags $1$ e $2$ sendo negativos e fora do intervalo de confiança por uma diferença mínima além de um lag $15$ significativo, o que poderia talvez indicar a necessidade de estimação de mais parâmetros para um ajuste mais fino, mas que perderia em parcimônia com a estimação de novos parâmetros. O mesmo vale para os valores dos lags $1$ e $2$ fora do intervalo de confiança da PACF em ambos os modelos.
-
-```{r}
-lb<-function(f,k)c(LB24=Box.test(residuals(f),type="Ljung-Box",lag=24,fitdf=k)$p.value,
-                   LB36=Box.test(residuals(f),type="Ljung-Box",lag=36,fitdf=k)$p.value)
-rbind("(1,1,0)(1,0,0)[12]"=lb(fit1,2),
-      "(1,1,0)(0,0,1)[12]"=lb(fit2,2))
-```
-
-Os testes de Ljung-box para os lags $24$ e $36$ apresentaram p-valores superiores a $5\%$, o que indica ausênsia de correlação residual, e então que os modelos estão capturando adequadamente a estrutura temporal da série, sem restar um padrão sistemático claro dos erros aparentemente.
