@@ -1,0 +1,799 @@
+---
+title: "Lista 2 - Econometria 2"
+author: "Augusto Floriano, Danyel Lima, Fernando Soares e Gustavo Darmont"
+date: "2025-09-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, fig.align="center")
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, knitr, zoo, lubridate, broom, ipeadatar, dplyr, ggplot2, forecast, tseries, urca, plotly)
+```
+
+# Questão 1: Asset Pricing
+
+## (a)
+
+```{r RISK PREMIUM}
+## Recuperando 
+
+# 1. Importação dos Dados
+ff_raw <- read_csv("25_Portfolios_5x5.csv", skip = 15)
+
+# 2. Limpeza e Tratamento Mensal
+ff_monthly <- ff_raw %>%
+  rename(Date = `...1`) %>%
+  filter(!is.na(Date), !str_detect(Date, "Copyright")) %>%
+  mutate(Date = ymd(paste0(Date, "01"))) %>%
+  mutate(across(-Date, as.numeric))
+
+# Carregar e preparar os dados de CPI
+cpi_raw <- read_csv("CPIAUCNS.csv")
+
+# Cálculo do componente inflacionário
+cpi_monthly <- cpi_raw %>%
+  rename(CPI = CPIAUCNS) %>%
+  mutate(Date = ymd(observation_date)) %>%
+  arrange(Date) %>%
+  mutate(Inflation_pct = (CPI / lag(CPI) - 1) * 100) %>%
+  select(Date, Inflation_pct)
+
+# Adicionando o CPI ao dataframe
+ff_monthly_real <- ff_monthly %>%
+  left_join(cpi_monthly, by = "Date") %>%
+  filter(!is.na(Inflation_pct))
+
+# 3. Conversão para Trimestral (compondo os retornos com o componente inflacionário)
+safe_prod <- function(x) {
+  if (all(is.na(x))) return(NA_real_)
+  prod(1 + x/100, na.rm = TRUE)
+}
+
+ff_quarterly_real <- ff_monthly_real %>%
+  mutate(YearQuarter = as.yearqtr(Date)) %>%
+  group_by(YearQuarter) %>%
+  summarise(
+    across(
+      .cols = -c(Date, Inflation_pct),
+      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1) * 100
+    ),comp_inflation_quarterly = (safe_prod(Inflation_pct) - 1) * 100
+  ) %>%
+  ungroup()
+
+head(ff_quarterly_real)
+
+
+## DADOS DE CONSUMO:
+
+# 1. Importação do Consumo Nominal (Tabela 2.3.5)
+
+# Carregar os cabeçalhos
+header_nominal <- read_csv("Table 2.3.5. Personal Consumption Expenditures by Major Type of Product.csv",
+  skip = 3,
+  n_max = 2,
+  col_names = FALSE
+)
+
+# Carregar os dados
+data_nominal <- read_csv(
+  "Table 2.3.5. Personal Consumption Expenditures by Major Type of Product.csv",
+  skip = 5,
+  col_names = FALSE,
+  col_types = cols(.default = "c")
+)
+
+# Criar nomes de colunas corretos
+year_row_nom <- header_nominal[1, -c(1, 2)]
+quarter_row_nom <- header_nominal[2, -c(1, 2)]
+new_column_names_nom <- paste0(zoo::na.locf(unlist(year_row_nom)), "_", unlist(quarter_row_nom))
+colnames(data_nominal) <- c("Line", "Description", new_column_names_nom)
+
+# Isolar a série de consumo nominal de não duráveis (Linha 8)
+nondurables_nominal <- data_nominal %>%
+  filter(Line == "8") %>%
+  pivot_longer(
+    cols = contains("_Q"),
+    names_to = "Quarter_str",
+    values_to = "Nondurables_Nominal"
+  ) %>%
+  mutate(
+    YearQuarter = as.yearqtr(Quarter_str, format = "%Y_Q%q"),
+    Nondurables_Nominal = as.numeric(Nondurables_Nominal)
+  ) %>%
+  select(YearQuarter, Nondurables_Nominal)
+
+
+# 2. Importação do Índice de Preços (Tabela 2.3.4)
+
+# Carregar os cabeçalhos
+header_prices <- read_csv("Table 2.3.4. Price Indexes for Personal Consumption Expenditures by Major Type of Product.csv",
+  skip = 3,
+  n_max = 2,
+  col_names = FALSE
+)
+
+# Carregar os dados
+data_prices <- read_csv(
+  "Table 2.3.4. Price Indexes for Personal Consumption Expenditures by Major Type of Product.csv",
+  skip = 5,
+  col_names = FALSE,
+  col_types = cols(.default = "c")
+)
+
+# Criar nomes de colunas corretos
+year_row_price <- header_prices[1, -c(1, 2)]
+quarter_row_price <- header_prices[2, -c(1, 2)]
+new_column_names_price <- paste0(zoo::na.locf(unlist(year_row_price)), "_", unlist(quarter_row_price))
+colnames(data_prices) <- c("Line", "Description", new_column_names_price)
+
+# Isolar a série do índice de preços de não duráveis (Linha 8)
+price_index_nondurables <- data_prices %>%
+  filter(Line == "8") %>%
+  pivot_longer(
+    cols = contains("_Q"),
+    names_to = "Quarter_str",
+    values_to = "Price_Index"
+  ) %>%
+  mutate(
+    YearQuarter = as.yearqtr(Quarter_str, format = "%Y_Q%q"),
+    Price_Index = as.numeric(Price_Index)
+  ) %>%
+  select(YearQuarter, Price_Index)
+
+
+# 3. Calculando o Consumo Real
+
+# Unir as duas tabelas e deflacionar os valores nominais
+nondurables_quarterly <- nondurables_nominal %>%
+  inner_join(price_index_nondurables, by = "YearQuarter") %>%
+  mutate(
+    # A fórmula para deflacionar é (Valor Nominal / Índice de Preços) * 100
+    Nondurables_Real = (Nondurables_Nominal / Price_Index) * 100
+  ) %>%
+  select(YearQuarter, Nondurables_Real)
+
+cat("--- Amostra do Consumo Real de Não-Duráveis Calculado ---\n")
+head(nondurables_quarterly)
+
+# 4. Importação e Adequação do Dataframe de População (Tabela 2.1)
+header_pop <- read_csv("Table 2.1. Personal Income and Its Disposition.csv",
+  skip = 3,
+  n_max = 2,
+  col_names = FALSE
+)
+
+data_pop <- read_csv(
+  "Table 2.1. Personal Income and Its Disposition.csv",
+  skip = 5,
+  col_names = FALSE,
+  col_types = cols(.default = "c")
+)
+
+# Criando os nomes de coluna corretos
+year_row_pop <- header_pop[1, -c(1, 2)]
+quarter_row_pop <- header_pop[2, -c(1, 2)]
+new_column_names_pop <- paste0(zoo::na.locf(unlist(year_row_pop)), "_", unlist(quarter_row_pop))
+colnames(data_pop) <- c("Line", "Description", new_column_names_pop)
+
+# 5. Limpeza e Transformação para a série de População
+population_quarterly <- data_pop %>%
+  filter(Line == 40) %>%
+  pivot_longer(
+    cols = contains("_Q"),
+    names_to = "Quarter_str",
+    values_to = "Population_Thousands"
+  ) %>%
+  mutate(
+    YearQuarter = as.yearqtr(Quarter_str, format = "%Y_Q%q"),
+    Population_Thousands = as.numeric(Population_Thousands)
+  ) %>%
+  select(YearQuarter, Population_Thousands)
+
+# 6. Unindo os dataframes de consumo e população
+consumption_full <- nondurables_quarterly %>%
+  left_join(population_quarterly, by = "YearQuarter")
+
+# Verificando se há NAs na nova coluna
+cat("\nValores Faltantes (NA) na coluna de População:", sum(is.na(consumption_full$Population_Thousands)), "\n")
+
+# 7. Criando a coluna de consumo per-capita
+consumption_full <- consumption_full %>%
+  mutate(Nondurables_Real_PC = (Nondurables_Real * 1000000000) / (Population_Thousands * 1000))
+
+summary(consumption_full$Nondurables_Real_PC)
+head(consumption_full)
+
+# 8. Calculando o Crescimento do Consumo Real Per-Capita
+consumption_final <- consumption_full %>%
+  arrange(YearQuarter) %>%
+  mutate(
+    consumption_growth_pc = log(Nondurables_Real_PC) - lag(log(Nondurables_Real_PC))
+  )
+
+head(consumption_final)
+
+
+## DADOS DOS FATORES FAMA-FRENCH E TAXA LIVRE DE RISCO (RF):
+
+# 1. Importação dos Dados
+factors_raw <- read_csv("F-F_Research_Data_Factors.csv", skip = 3)
+
+# 2. Limpeza e Tratamento Mensal
+factors_monthly <- factors_raw %>%
+  rename(Date = `...1`) %>%
+  filter(!is.na(Date)) %>%
+  mutate(Date = ymd(paste0(Date, "01"))) %>%
+  mutate(across(-Date, as.numeric))
+
+# 3. Conversão da RF para Trimestral (compondo a taxa)
+rf_quarterly <- factors_monthly %>%
+  mutate(YearQuarter = as.yearqtr(Date)) %>%
+  group_by(YearQuarter) %>%
+  summarise(
+    RF_quarterly = (safe_prod(RF) - 1) * 100
+  ) %>%
+  ungroup()
+
+
+## JUNÇÃO FINAL E CÁLCULO DO SDF
+
+# 1. Unir as bases de dados (Fama-French, Consumo e Taxa Livre de Risco)
+final_data <- ff_quarterly_real %>%
+  left_join(consumption_final, by = "YearQuarter") %>%
+  left_join(rf_quarterly, by = "YearQuarter")
+
+# 2. Calcular a Taxa Livre de Risco Real (deflacionada)
+# Unindo os dados de inflação com os de RF
+rf_data_with_inflation <- rf_quarterly %>%
+  left_join(ff_quarterly_real %>% select(YearQuarter, comp_inflation_quarterly), by = "YearQuarter")
+
+# Calculando a RF real
+rf_real_quarterly <- rf_data_with_inflation %>%
+  mutate(
+    RF_real_quarterly = (( (1 + RF_quarterly / 100) / (1 + comp_inflation_quarterly / 100) ) - 1) * 100
+  ) %>%
+  select(YearQuarter, RF_real_quarterly)
+
+# 3. Unir a RF Real aos dados finais
+final_data <- ff_quarterly_real %>%
+  left_join(consumption_final, by = "YearQuarter") %>%
+  left_join(rf_real_quarterly, by = "YearQuarter") # Use a nova tabela de RF real
+
+# 4. Criar o Dataframe Final de Análise
+analysis_df <- final_data %>%
+  # Calcular o excesso de retorno (prêmio de risco) para cada portfólio
+  mutate(across(
+    .cols = starts_with("SMALL") | starts_with("ME") | starts_with("BIG"),
+    .fns = ~ .x - RF_real_quarterly,
+    .names = "{.col}_excess"
+  )) %>%
+  # Calcular o SDF
+  mutate(
+    gross_consumption_growth = exp(consumption_growth_pc),
+    SDF = 0.99 * (gross_consumption_growth ^ -2)
+  ) %>%
+  # Remover a primeira linha que tem NA no SDF (devido ao lag do crescimento)
+  filter(!is.na(SDF))
+
+# 5. Calcular o Prêmio de Risco Estimado pelo Modelo
+mean_sdf <- mean(analysis_df$SDF, na.rm = TRUE)
+
+model_premiums <- analysis_df %>%
+  summarise(across(
+    .cols = ends_with("_excess"),
+    .fns = ~ -cov(SDF, .x, use = "complete.obs") / mean_sdf,
+    .names = "model_{.col}"
+  ))
+
+model_premiums_long <- model_premiums %>%
+  pivot_longer(cols = everything(), 
+               names_to = "Portfolio", 
+               values_to = "Model_Estimated_Premium")
+
+cat("--- Prêmios de Risco Trimestrais Estimados pelo Modelo\n")
+print(model_premiums_long, n = 25)
+```
+
+## (b)
+
+```{r CAPM}
+# 1. Tratando os Dados dos Fatores (análogo ao tratamento para os 25 portifólios da letra (a))
+factors_monthly_raw <- read_csv("F-F_Research_Data_Factors.csv", skip = 3)
+
+factors_monthly <- factors_monthly_raw %>%
+  rename(Date = `...1`) %>%
+  filter(!is.na(Date), !str_detect(Date, "Copyright")) %>%
+  mutate(Date = ymd(paste0(Date, "01"))) %>%
+  mutate(across(-Date, as.numeric))
+
+factors_monthly_real <- factors_monthly %>%
+  left_join(cpi_monthly, by = "Date") %>%
+  filter(!is.na(Inflation_pct))
+
+factors_quarterly_real <- factors_monthly_real %>%
+  mutate(YearQuarter = as.yearqtr(Date)) %>%
+  group_by(YearQuarter) %>%
+  summarise(
+    across(
+      .cols = c(`Mkt-RF`, RF),
+      .fns = ~ ((safe_prod(.x) / safe_prod(Inflation_pct)) - 1) * 100,
+      .names = "{.col}_real"
+    ),
+    `Mkt-RF` = (safe_prod(`Mkt-RF`) - 1) * 100,
+    SMB = (safe_prod(SMB) - 1) * 100,
+    HML = (safe_prod(HML) - 1) * 100
+  ) %>%
+  ungroup()
+
+cat("--- Fatores Fama-French Trimestrais (Reais e Nominais) ---\n")
+head(factors_quarterly_real)
+
+# 2. Unindo os Retornos dos Portfólios com o Fator de Mercado
+capm_data <- analysis_df %>%
+  select(YearQuarter, ends_with("_excess")) %>%
+  inner_join(factors_quarterly_real %>% select(YearQuarter, `Mkt-RF`), by = "YearQuarter")
+
+# 3. Estimando o CAPM para cada um dos 25 Portfólios
+capm_results <- capm_data %>%
+  pivot_longer(
+    cols = ends_with("_excess"),
+    names_to = "Portfolio",
+    values_to = "Excess_Return"
+  ) %>%
+  # Agrupa por portfólio para rodar uma regressão para cada um
+  group_by(Portfolio) %>%
+  # tidyr::nest() cria um "sub-dataframe" para cada portfólio
+  nest() %>%
+  # purrr::map() aplica a função de regressão (lm) a cada sub-dataframe
+  mutate(
+    model = map(data, ~ lm(Excess_Return ~ `Mkt-RF`, data = .x)),
+    # broom::tidy() extrai os coeficientes (alpha e beta) de cada modelo de forma organizada
+    tidied = map(model, tidy)
+  ) %>%
+  # Expande a lista de coeficientes de volta para o formato de tabela
+  unnest(tidied)
+
+cat("\n\n--- Coeficientes do CAPM (Alpha e Beta) para cada Portfólio ---\n")
+print(capm_results)
+
+# 4. Calculando o Prêmio de Risco Previsto pelo CAPM
+# Calculamos a média do prêmio de risco de mercado histórico
+avg_market_premium <- mean(capm_data$`Mkt-RF`, na.rm = TRUE)
+
+# Filtramos para pegar apenas os Betas (o coeficiente de `Mkt-RF`) de cada portfólio
+betas <- capm_results %>%
+  filter(term == "`Mkt-RF`") %>%
+  select(Portfolio, beta = estimate)
+
+# Calculamos o prêmio de risco de cada portfólio: Beta * Média do Prêmio de Mercado
+capm_risk_premiums <- betas %>%
+  mutate(CAPM_Premium = beta * avg_market_premium)
+
+cat("\n\n--- Prêmio de Risco Trimestral Estimado pelo CAPM\n")
+print(capm_risk_premiums, n = 25)
+```
+
+
+## (c)
+
+```{r 3 FATORES}
+# 1. Preparando os Dados para a Regressão de 3 Fatores
+# Unir os retornos reais dos portfólios com os três fatores Fama-French.
+three_factor_data <- analysis_df %>%
+  select(YearQuarter, ends_with("_excess")) %>%
+  inner_join(
+    factors_quarterly_real %>% select(YearQuarter, `Mkt-RF_real`, SMB, HML), 
+    by = "YearQuarter"
+  )
+
+cat("--- Amostra dos Dados para o Modelo de 3 Fatores ---\n")
+head(three_factor_data)
+
+# 2. Estimando o Modelo de 3 Fatores para cada Portfólio (análogo à letra (b))
+three_factor_results <- three_factor_data %>%
+  pivot_longer(
+    cols = ends_with("_excess"),
+    names_to = "Portfolio",
+    values_to = "Excess_Return"
+  ) %>%
+  group_by(Portfolio) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ lm(Excess_Return ~ `Mkt-RF_real` + SMB + HML, data = .x)),
+    tidied = map(model, tidy)
+  ) %>%
+  unnest(tidied)
+
+cat("\n\n--- Coeficientes do Modelo de 3 Fatores para cada Portfólio ---\n")
+print(three_factor_results, n = 12)
+
+# 3. Calculando o Prêmio de Risco Previsto pelo Modelo de 3 Fatores
+# Calculamos a média histórica de cada um dos três fatores
+avg_factor_premiums <- three_factor_data %>%
+  summarise(
+    avg_mkt_real = mean(`Mkt-RF_real`, na.rm = TRUE),
+    avg_smb = mean(SMB, na.rm = TRUE),
+    avg_hml = mean(HML, na.rm = TRUE)
+  )
+
+# Extraímos os betas de cada portfólio para cada fator
+betas_3f <- three_factor_results %>%
+  filter(term %in% c("`Mkt-RF_real`", "SMB", "HML")) %>%
+  select(Portfolio, term, estimate) %>%
+  pivot_wider(names_from = term, values_from = estimate) %>%
+  rename(
+    beta_mkt = `\`Mkt-RF_real\``,
+    beta_smb = SMB,
+    beta_hml = HML
+  )
+
+# Calculamos o prêmio de risco para cada portfólio
+three_factor_premiums <- betas_3f %>%
+  mutate(
+    Three_Factor_Premium = 
+      beta_mkt * avg_factor_premiums$avg_mkt_real +
+      beta_smb * avg_factor_premiums$avg_smb +
+      beta_hml * avg_factor_premiums$avg_hml
+  )
+
+cat("\n\n--- Prêmio de Risco Trimestral Estimado pelo Modelo de 3 Fatores\n")
+print(three_factor_premiums, n = 25)
+```
+
+## (d)
+```{r PCA}
+# Selecionando os retornos isoladamente no dataframe
+portfolio_names <- c("SMALL LoBM_excess", "SMALL HiBM_excess", "ME1 BM2_excess", "ME1 BM3_excess",    "ME1 BM4_excess", "ME2 BM1_excess", "ME2 BM2_excess", "ME2 BM3_excess", "ME2 BM4_excess",
+   "ME2 BM5_excess", "ME3 BM1_excess", "ME3 BM2_excess", "ME3 BM3_excess", "ME3 BM4_excess",
+   "ME3 BM5_excess",  "ME4 BM1_excess", "ME4 BM2_excess", "ME4 BM3_excess", "ME4 BM4_excess", 
+   "ME4 BM5_excess",  "ME5 BM2_excess", "ME5 BM3_excess",    "ME5 BM4_excess",  "BIG LoBM_excess",
+   "BIG HiBM_excess")
+RR_pca <- analysis_df %>%
+  select(portfolio_names)
+
+# Realizando a análise em componentes principais (normalizada)
+pca_result <- prcomp(RR_pca, center = TRUE, scale. = TRUE)
+
+# Extraindo o sumário dos resultados do PCA
+pca_summary <- summary(pca_result)
+
+# Determinando o número de fatores que explicam 60% ou mais da variância
+cumulative_variance <- pca_summary$importance["Cumulative Proportion", ]
+qnts_fatores <- which(cumulative_variance >= 0.60)[1]
+
+print(pca_summary$importance[,1:10])
+
+cat(sprintf(
+  "Fatores necessários para explicar 60%% da variação: %d",
+  qnts_fatores
+))
+
+# Guardando os cinco primeiros fatores, explicam 95% da variação
+pca_factors <- as.data.frame(pca_result$x[, 1:5])
+```
+O primeiro fator é suficiente para explicar mais de 70% da variância do modelo, mas usaremos os primeiros cinco para melhor efeito de comparação mais a frente.
+
+## (e)
+```{r prep comparação}
+
+#--------------- Loop para calcular os prêmios estimados e o R2 do modelo PCA--------------------
+
+# Tabela pros prêmios e R2
+pca_model_results <- data.frame(
+  Portfolio = character(),
+  R_Squared = numeric(),
+  Equity_Premium = numeric(),
+  stringsAsFactors = FALSE
+)
+
+
+for (portfolio in portfolio_names) {
+  
+  # Combinar os dados para a regressão: 
+  # A variável dependente (retorno do portfólio) e as independentes (fatores PCA)
+  regression_data <- cbind(
+    Portfolio_Return = analysis_df[[portfolio]], 
+    pca_factors
+  )
+  
+  # 3. Rodar a regressão linear do retorno do portfólio contra os 5 fatores PCA
+  # A fórmula "Portfolio_Return ~ ." significa regredir a primeira coluna contra todas as outras.
+  model <- lm(Portfolio_Return ~ ., data = regression_data)
+  
+  # Extrair o sumário do modelo
+  model_summary <- summary(model)
+  
+  # 4. Extrair o R² ajustado
+  r_squared <- model_summary$r.squared
+  
+  # 5. Calcular o Equity Premium
+  # O prêmio de risco estimado é a média dos valores preditos (fitted values) pela regressão.
+  equity_premium <- mean(fitted(model))
+  
+  # 6. Adicionar os resultados ao dataframe
+  pca_model_results <- rbind(
+    pca_model_results,
+    data.frame(
+      Portfolio = portfolio,
+      R_Squared = r_squared,
+      Equity_Premium = equity_premium
+    )
+  )
+}
+
+# 7. Exibir os resultados
+print("Resultados do Modelo de 5 Fatores (PCA)")
+print(pca_model_results)
+
+# Para comparação, você pode calcular o R² médio
+cat(sprintf(
+  "\nR² Médio do modelo PCA: %.4f",
+  mean(pca_model_results$R_Squared)
+))
+
+#---------------Loop para obter um R2 para o modelo de consumo-----------------------
+
+# Dataframe para o R2
+ccapm_results <- data.frame(
+  Portfolio = character(),
+  R_Squared = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Loop da regressão
+for (portfolio in portfolio_names) {
+  formula_str <- paste0("`", portfolio, "` ~ consumption_growth_pc")
+  formula_obj <- as.formula(formula_str)
+  
+  # Rodar a regressão linear usando a fórmula criada
+  model <- lm(formula_obj, data = analysis_df)
+  model_summary <- summary(model)
+  # Guardar o R2 aqui
+  r_squared <- model_summary$r.squared
+  # Adicionar os resultados ao nosso dataframe de resultados
+  ccapm_results <- rbind(
+    ccapm_results,
+    data.frame(
+      Portfolio = portfolio,
+      R_Squared = r_squared
+    )
+  )
+}
+
+
+# Resultados
+print(ccapm_results)
+cat(sprintf(
+  "\nR2 Médio do modelo básico: %.4f",
+  mean(ccapm_results$R_Squared)
+))
+
+```
+
+Com os dados organizados:
+```{r comparação}
+# Recolhendo os prêmios 
+obs_EP <- sapply(analysis_df[portfolio_names], mean)
+portfolio <- colnames(ff_quarterly_real %>% select(-YearQuarter, -comp_inflation_quarterly))
+basico <- model_premiums_long['Model_Estimated_Premium']
+capm <- capm_risk_premiums['CAPM_Premium']
+tres_fatores <- three_factor_premiums['Three_Factor_Premium']
+pca <- pca_model_results['Equity_Premium']
+
+# Comparação dos equity premiums 
+comp_EP <- cbind(portfolio, basico, capm, tres_fatores, pca, obs_EP)
+colnames(comp_EP) <- c('Portfólio', 'Est. Consumo', 'Est. CAPM', 'Est. 3f', 'Est. PCA', 'Observado')
+
+rownames(comp_EP) <- NULL
+  
+print(comp_EP)
+
+# ------------------------------ Fazendo mesmo para o R2 -----------------------------
+# CAPM
+capm_summary <- capm_data %>%
+  pivot_longer(
+    cols = ends_with("_excess"),
+    names_to = "Portfolio",
+    values_to = "Excess_Return"
+  ) %>%
+  group_by(Portfolio) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ lm(Excess_Return ~ `Mkt-RF`, data = .x)),
+    glanced = map(model, glance)
+  ) %>%
+  # Expanda a tabela de estatísticas
+  unnest(glanced)
+
+# 3f
+three_factor_summary <- three_factor_data %>%
+  pivot_longer(
+    cols = ends_with("_excess"),
+    names_to = "Portfolio",
+    values_to = "Excess_Return"
+  ) %>%
+  group_by(Portfolio) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ lm(Excess_Return ~ `Mkt-RF_real` + SMB + HML, data = .x)),
+    glanced = map(model, glance)
+  ) %>%
+  unnest(glanced)
+
+comp_R2 <- data.frame(
+  Portfolio = portfolio_names, 
+  R2_Modelo_Basico = ccapm_results$R_Squared,
+  R2_CAPM = capm_summary$r.squared,
+  R2_3_Fatores = three_factor_summary$r.squared,
+  R2_PCA = pca_model_results$R_Squared
+)
+
+print(comp_R2)
+
+# Tabela de R2 médios
+medios_R2 <- data.frame(
+  Modelo = c(
+    "Consumo", 
+    "CAPM", 
+    "3f", 
+    "PCA"
+  ),
+  R2_Medio = c(
+    mean(comp_R2$R2_Modelo_Basico),
+    mean(comp_R2$R2_CAPM),
+    mean(comp_R2$R2_3_Fatores),
+    mean(comp_R2$R2_PCA)
+  )
+)
+
+medios_R2$R2_Medio <- format(round(medios_R2$R2_Medio, 4), nsmall = 4)
+print(medios_R2)
+```
+Temos observações de grau de ajuste crescente do modelo de consumo para o PCA, sendo esse último muito bem ajustado, mas de difícil interpretação econômica (por se tratar de um método estatístico de obtenção de fatores de maior poder explicativo).
+
+## (f)
+```{r fama-macbeth}
+# Limpando o nome da coluna do portfólio para facilitar a junção posterior
+betas_3f <- betas_3f %>%
+  mutate(Portfolio = str_remove(Portfolio, "_excess"))
+
+## Regressão cross-section
+
+# Organizando os dados
+famac_data <- three_factor_data %>%
+  pivot_longer(
+    cols = ends_with("_excess"),
+    names_to = "Portfolio",
+    values_to = "Excess_Return"
+  ) %>%
+  mutate(Portfolio = str_remove(Portfolio, "_excess")) %>%
+  # Juntar os betas estimados 
+  left_join(betas_3f, by = "Portfolio")
+
+# Realizando a regressão
+famac_results <- famac_data %>%
+  group_by(YearQuarter) %>%
+  nest() %>%
+  mutate(
+    # Para cada trimestre, rodamos a regressão dos 25 retornos contra os 25 betas
+    cross_section_model = map(data, ~ lm(Excess_Return ~ beta_mkt + beta_smb + beta_hml, data = .x)),
+    # Extraímos os coeficientes (os gammas) de cada modelo
+    tidied = map(cross_section_model, tidy)
+  ) %>%
+  # Expandir a tabela de coeficientes
+  unnest(tidied)
+
+# Prêmio de risco por trimestre:
+print(head(famac_results), digits = 3)
+
+# Agrupamos por fator (term) e calculamos a média, o erro padrão e a estatística-t
+final_premiums_summary <- famac_results %>%
+  group_by(term) %>%
+  summarise(
+    # Média do gamma (prêmio de risco médio)
+    Avg_Premium = mean(estimate),
+    # Erro padrão da média (desvio padrão / raiz do número de observações)
+    Std_Error = sd(estimate) / sqrt(n()),
+    # Estatística t de Fama-Macbeth
+    T_Statistic = Avg_Premium / Std_Error,
+    # P-valor do teste t
+    P_Value = 2 * pt(-abs(T_Statistic), df = n() - 1)
+  ) %>%
+  rename(Fator = term)
+
+print(final_premiums_summary, digits = 4,
+            caption = "Prêmios de Risco Médios e Testes de Significância")
+```
+Analisando os p-valores da regressão final, apenas o beta do mercado é significativo, ou seja, é a única fonte de risco sistemático em que o efeito é estatisticamente diferente de zero. Além disso, o intercepto não ser estatisticamente diferente de zero corrobora a hipótese de uma série estacionária. 
+
+# 2.
+
+```{r}
+ipca<-ipeadata("PRECOS12_IPCA12")%>%filter(date>=as.Date("2000-01-01"),date<=as.Date("2025-01-01"))%>%arrange(date)
+saveRDS(ipca,"ipca_precos12_2000_2025.rds");write.csv(ipca,"ipca_precos12_2000_2025.csv",row.names=FALSE)
+```
+
+## a)
+
+```{r}
+ipca<-readRDS("ipca_precos12_2000_2025.rds");s<-ts(ipca$value,start=c(2000,1),frequency=12)
+summary(ipca$value);c(mean=mean(ipca$value),sd=sd(ipca$value),min=min(ipca$value),max=max(ipca$value))
+ggplotly(autoplot(s)+theme_classic()+ggtitle("IPCA - Índice (2000-2025)"))%>%layout(plot_bgcolor="white",paper_bgcolor="white",yaxis=list(rangemode="tozero"))
+ggplotly(autoplot(log(s))+theme_classic()+ggtitle("Log do IPCA"))%>%layout(plot_bgcolor="white",paper_bgcolor="white",yaxis=list(rangemode="tozero"))
+ggplotly(autoplot(diff(log(s)))+theme_classic()+ggtitle("Δlog(IPCA)"))%>%layout(plot_bgcolor="white",paper_bgcolor="white",yaxis=list(rangemode="tozero"))
+```
+
+Pode-se observar uma notável tendência de crescimento do IPCA tanto em nível quanto em log, enquanto o comportamento dos dados em diferença do log apresentam um comportamento mais oscilatório, sem tendência clara de crescimento e se aproximando um pouco mais de um ruído branco.
+
+```{r}
+adf.test(s);pp.test(s)
+```
+
+Pode-se observar que os testes não rejeitam a hipótese nula de raiz unitária, dado o elevado p-valor dos testes, o que indica uma iminente tendência estocástica e não-estacionariedade, conforme indicado pelos gráficos.
+
+```{r}
+adf.test(log(s));pp.test(log(s))
+```
+
+Assim como em nível, em log se observa um p-valor elevado, com os testes não rejeitando a hipótese nula de raiz unitária, indicando novamente tendência estocástica e não-estacionariedade
+
+```{r}
+adf.test(diff(log(s)));pp.test(diff(log(s)))
+```
+
+Para os dados em diferença do log, observa-se um p-valor consideravelmente menor, rejeitando a hipótese nula de raiz unitária e indicando estacionariedade.
+
+```{r}
+d<-diff(log(s));a<-acf(d,plot=FALSE,na.action=na.pass);p<-pacf(d,plot=FALSE,na.action=na.pass);ci<-qnorm(0.975)/sqrt(a$n.used)
+xa<-as.numeric(a$lag)*12;ya<-as.numeric(a$acf);xp<-as.numeric(p$lag)*12;yp<-as.numeric(p$acf)
+plot_ly(x=xa,y=ya,type="bar")%>%layout(title="ACF Δlog(IPCA)",plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=-ci,y1=-ci)))
+plot_ly(x=xp,y=yp,type="bar")%>%layout(title="PACF Δlog(IPCA)",plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=-ci,y1=-ci)))
+```
+
+Enquanto na PACF não se observa nenhum lag significativo, com todos os lags após o lag nulo se mantendo dentro do intervalo de confiança, pode-se assumir que as partes de média móvel sejam 0 tanto no aspecto não-sazonal quanto no sazonal, com possivelmente $q=Q=0$.
+
+Contudo, analisando a ACF, é possível observar um decaimento gradual após o lag 0 e além disso um comportamento de crescimento após um ano, indicando um possível fator AR tanto sazonal quanto não-sazonal, indicando possivelmente que $p=P=1$.
+
+Dessa forma, o modelo que tende a ser o mais adequado para o IPCA é o $SARIMA(1,1,0)(1,0,0)_{12}$.
+
+## b)
+
+```{r}
+library(forecast);library(plotly)
+y<-log(s)
+fit1<-Arima(y,order=c(1,1,0),seasonal=list(order=c(1,0,0),period=12),include.drift=FALSE,method="ML")
+fit2<-Arima(y,order=c(1,1,0),seasonal=list(order=c(0,0,1),period=12),include.drift=FALSE,method="ML")
+summary(fit1);summary(fit2)
+```
+
+Estimados os dois modelos, podemos observar valores muito próximos nos testes de AIC e BIC, mas o modelo com termo AR sazonal apresenta um valor substancialmente menor em ambos os testes, sendo esse o modelo mais indicado com base nos dois testes.
+
+```{r}
+plres<-function(f,t){
+  r<-na.omit(residuals(f));ix<-seq_along(r)
+  a<-acf(r,plot=FALSE);p<-pacf(r,plot=FALSE);ci<-qnorm(0.975)/sqrt(a$n.used)
+  xa<-as.numeric(a$lag)*12;ya<-as.numeric(a$acf);xp<-as.numeric(p$lag)*12;yp<-as.numeric(p$acf)
+  rt<-plot_ly(x=ix,y=as.numeric(r),type="scatter",mode="lines")%>%layout(title=paste0("Resíduos - ",t),plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Índice temporal"),yaxis=list(title="Resíduo",rangemode="tozero"))
+  ac<-plot_ly(x=xa,y=ya,type="bar")%>%layout(title=paste0("ACF dos resíduos - ",t),plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xa),x1=max(xa),y0=-ci,y1=-ci)))
+  pc<-plot_ly(x=xp,y=yp,type="bar")%>%layout(title=paste0("PACF dos resíduos - ",t),plot_bgcolor="white",paper_bgcolor="white",xaxis=list(title="Defasagem (meses)"),yaxis=list(title="Correlação",rangemode="tozero"),shapes=list(list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=ci,y1=ci),list(type="line",xref="x",yref="y",x0=min(xp),x1=max(xp),y0=-ci,y1=-ci)))
+  list(rt=rt,ac=ac,pc=pc)
+}
+g1<-plres(fit1,"SARIMA(1,1,0)(1,0,0)[12]")
+g2<-plres(fit2,"SARIMA(1,1,0)(0,0,1)[12]")
+g1$rt;g2$rt
+g1$ac;g2$ac
+g1$pc;g2$pc
+```
+
+Dado que os dois modelos tem coeficientes próximos, é esperado um desempenho similar dos gráficos de resíduos, algo que de fato ocorre, com ambos aproximando-se de um ruído branco. Em ambos os modelos se observa um decaimento após o lag 0 com os lags $1$ e $2$ sendo negativos e fora do intervalo de confiança por uma diferença mínima além de um lag $15$ significativo, o que poderia talvez indicar a necessidade de estimação de mais parâmetros para um ajuste mais fino, mas que perderia em parcimônia com a estimação de novos parâmetros. O mesmo vale para os valores dos lags $1$ e $2$ fora do intervalo de confiança da PACF em ambos os modelos.
+
+```{r}
+lb<-function(f,k)c(LB24=Box.test(residuals(f),type="Ljung-Box",lag=24,fitdf=k)$p.value,
+                   LB36=Box.test(residuals(f),type="Ljung-Box",lag=36,fitdf=k)$p.value)
+rbind("(1,1,0)(1,0,0)[12]"=lb(fit1,2),
+      "(1,1,0)(0,0,1)[12]"=lb(fit2,2))
+```
+
+Os testes de Ljung-box para os lags $24$ e $36$ apresentaram p-valores superiores a $5\%$, o que indica ausênsia de correlação residual, e então que os modelos estão capturando adequadamente a estrutura temporal da série, sem restar um padrão sistemático claro dos erros aparentemente.
