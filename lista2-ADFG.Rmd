@@ -533,10 +533,10 @@ rbind("(1,1,0)(1,0,0)[12]"=lb(fit1,2),
 
 Os testes de Ljung-box para os lags $24$ e $36$ apresentaram p-valores superiores a $5\%$, o que indica ausênsia de correlação residual, e então que os modelos estão capturando adequadamente a estrutura temporal da série, sem restar um padrão sistemático claro dos erros aparentemente.
 
-##c)
+## c)
 
 
-```{r}
+```{r , echo=FALSE}
 
 train_data <- window(y, end = c(2023, 1))
 
@@ -587,5 +587,6 @@ rmse_table <- data.frame(
 print(kable(rmse_table, caption = "Comparativo do Erro Quadrático Médio da Previsão (RMSE)"))
 ```
 As estimações apresentaram resultados extremamente similares para os dois modelos, tanto que graficamente parecem idênticos, porém, analisando ponto a ponto é possível notar que como esperado os modelos apresentaram resultados marginalmente diferentes. Isso pode ser explicado pela similaridade teórica entre os modelos AR e MA e pelo valor absoluto pequeno do coeficiente sazonal em ambos os modelos, que acaba tornando ainda menor a diferença entre os modelos.
+
 
 Apesar da similaridade gráfica, nos testes de previsão o modelo MA sazonal apresentou um RMSE marginalmente menor, dessa forma é o modelo que apresentou previsões mais próximas da realidade. Note que para previsões o modelo considerado melhor é diferente daquele via AIC/BIC, oque indica que o modelo mais "ajustado" não é necessariamente o mais adequado para previsões.
