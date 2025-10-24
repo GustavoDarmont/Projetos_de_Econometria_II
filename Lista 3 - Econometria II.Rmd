@@ -6,62 +6,72 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo=TRUE);library(readxl);library(dplyr);library(plotly);library(urca);library(tseries)
+knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE);library(readxl);library(dplyr);library(plotly);library(urca);library(tseries)
 # d<-read_excel("C:/Users/danye/Downloads/shiller_2013.xls")[,c("Short_R","Long_R")]
 # saveRDS(d,"C:/Users/danye/Downloads/shiller_rates.rds")
 ```
 
+# Análise visual das séries
+
 ```{r}
-d_raw <- readRDS("C:/Users/danye/Downloads/shiller_rates.rds")
-
-d <- d_raw %>%
-  transmute(
-    Rt  = Long_R,
-    rt  = Short_R,
-    St  = Long_R - Short_R,
-    drt = c(NA, diff(Short_R))
-  )
-
-f.acf <- function(x, nm) {
-  a  <- acf(x, na.action = na.pass, plot = FALSE)
-  n  <- sum(!is.na(x))
-  ci <- qnorm(0.975) / sqrt(n)
-
-  lags <- as.numeric(a$lag)[-1]
-  vals <- as.numeric(a$acf)[-1]
-  ci_v <- rep(ci, length(lags))
-
-  plot_ly(x = lags, y = vals, type = "bar", name = nm) %>%
-    add_lines(x = lags, y =  ci_v,  line = list(color = "red", dash = "dash"), showlegend = FALSE) %>%
-    add_lines(x = lags, y = -ci_v,  line = list(color = "red", dash = "dash"), showlegend = FALSE)
-}
-
+d_raw<-readRDS("C:/Users/danye/Downloads/shiller_rates.rds")
+d<-d_raw%>%transmute(Rt=Long_R,rt=Short_R,St=Long_R-Short_R,drt=c(NA,diff(Short_R)))
 subplot(
-  list(
-    f.acf(d$Rt,  "Rt"),
-    f.acf(d$rt,  "rt"),
-    f.acf(d$St,  "St"),
-    f.acf(d$drt, "Δrt")
-  ),
-  nrows  = 2,
-  shareX = FALSE,
-  shareY = FALSE,
-  margin = 0.05
+list(
+plot_ly(y=d$Rt,type="scatter",mode="lines",name="Rt"),
+plot_ly(y=d$rt,type="scatter",mode="lines",name="rt"),
+plot_ly(y=d$St,type="scatter",mode="lines",name="St"),
+plot_ly(y=d$drt,type="scatter",mode="lines",name="Δrt")
+),nrows=2,shareX=FALSE,shareY=FALSE,margin=0.05
 )
+```
 
+Visualmente, nota-se que as séries das taxas longa ($R_t$) e curta ($r_t$) exibem trajetórias parecidas, boscilando em torno de um nível médio e sem tendência determinística clara, com prolongada persistência, indicando possivelmente a existência de raiz unitária. O spread ($S_t = R_t - r_t$) apresenta flutuações de menor amplitude, com valores positivos e negativos, sugerindo estacionariedade. Já a variação da taxa curta ($\Delta r_t$) mostra comportamento mais errático, com oscilações pontuais em torno de zero e sem padrão persistente, similar a um ruído branco.
+
+# Análise visual da ACF
+
+```{r}
+f.acf<-function(x,nm){
+a<-acf(x,na.action=na.pass,plot=FALSE);n<-sum(!is.na(x));ci<-qnorm(0.975)/sqrt(n)
+lags<-as.numeric(a$lag)[-1];vals<-as.numeric(a$acf)[-1];ci_v<-rep(ci,length(lags))
+plot_ly(x=lags,y=vals,type="bar",name=nm)%>%
+add_lines(x=lags,y= ci_v,line=list(color="red",dash="dash"),showlegend=FALSE)%>%
+add_lines(x=lags,y=-ci_v,line=list(color="red",dash="dash"),showlegend=FALSE)
+}
+subplot(
+list(
+f.acf(d$Rt,"Rt"),
+f.acf(d$rt,"rt"),
+f.acf(d$St,"St"),
+f.acf(d$drt,"Δrt")
+),nrows=2,shareX=FALSE,shareY=FALSE,margin=0.05
+)
 ```
 
 A ACF do $R_t$ é positiva e indica um decaimento consideravelmente lento, e longo, num ritmo quase que constante, indicando possivelmente a presença de raiz unitária. Da mesma forma, também se observa uma elevada persistência para $r_t$, cruzando a banda superior do limite do intervalo de confiança somente no lag $16$ e indicando a possibilidade de raiz unitária. No ACF do spread, observa-se uma maior oscilação mas ainda com maior parte dos lags fora do intervalo de confiança. Comportamento totalmente distinto se observa no $Δr_t$, com barras menores, quase todas dentro do intervalo de confiança, e aparentando ruido.
 
-```{r}
-adf <- list(
-  "Rt"  = ur.df(na.omit(d$Rt),  type = "drift", selectlags = "AIC"),
-  "rt"  = ur.df(na.omit(d$rt),  type = "drift", selectlags = "AIC"),
-  "St"  = ur.df(na.omit(d$St),  type = "drift", selectlags = "AIC"),
-  "Δrt" = ur.df(na.omit(d$drt), type = "drift", selectlags = "AIC")
-)
+# Testes de raiz unitária
 
-lapply(adf, summary)
+```{r}
+adf<-list(
+ "Rt" =ur.df(na.omit(d$Rt), type="drift", selectlags="AIC"),
+ "rt" =ur.df(na.omit(d$rt), type="drift", selectlags="AIC"),
+ "St" =ur.df(na.omit(d$St), type="drift", selectlags="AIC"),
+ "Δrt"=ur.df(na.omit(d$drt),type="drift",selectlags="AIC")
+)
+lapply(adf,summary)
 ```
 
+Três dos quatro modelos não apresentaram intercepto com significância estatística. Dessa forma, a especificação em formato de passeio aleatório foi adotada por ausência de tendência determinística e de intercepto estatisticamente significativo, conforme indicado tanto pela inspeção visual das séries quanto pelos testes sob “drift”, cujos interceptos foram insignificantes.
 
+```{r}
+adf<-list(
+ "Rt" =ur.df(na.omit(d$Rt), type="none", selectlags="AIC"),
+ "rt" =ur.df(na.omit(d$rt), type="none", selectlags="AIC"),
+ "St" =ur.df(na.omit(d$St), type="none", selectlags="AIC"),
+ "Δrt"=ur.df(na.omit(d$drt),type="none",selectlags="AIC")
+)
+lapply(adf,summary)
+```
+
+Com o modelo sem intercepto, observa-se a existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível.
