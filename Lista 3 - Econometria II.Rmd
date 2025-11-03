@@ -6,16 +6,53 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo=FALSE,message=FALSE,warning=FALSE);library(readxl);library(dplyr);library(plotly);library(urca);library(tseries)
-# d<-read_excel("C:/Users/danye/Downloads/shiller_2013.xls")[,c("Short_R","Long_R")]
-# saveRDS(d,"C:/Users/danye/Downloads/shiller_rates.rds")
+knitr::opts_chunk$set(echo=TRUE)
+
+# Bibliotecas utilizadas
+library(readxl)
+library(dplyr)
+library(plotly)
+library(urca)
+library(tseries)
+library(vars)
+library(tidyverse)
+library(tinytex)
+library(aod)
 ```
 
-# Análise visual das séries
-
 ```{r}
-d_raw<-readRDS("C:/Users/danye/Downloads/shiller_rates.rds")
-d<-d_raw%>%transmute(Rt=Long_R,rt=Short_R,St=Long_R-Short_R,drt=c(NA,diff(Short_R)))
+# RDS 
+# d <- read_xlsx("shiller_2013.xlsx")[,c("Short_R","Long_R")]
+# saveRDS(d,"shiller_rates.rds")
+# d_raw2 <- readRDS("shiller_rates.rds")
+
+# Excel direto 
+d_raw <- read_xlsx("shiller_2013.xlsx") %>%
+dplyr::select('Year','Short_R', 'Long_R')
+
+d <- d_raw %>%
+  transmute(
+    Rt  = Long_R,
+    rt  = Short_R,
+    St  = Long_R - Short_R,
+    drt = c(NA, diff(Short_R)),
+    dRt = c(NA, diff(Long_R))
+)
+
+f.acf <- function(x, nm) {
+  a  <- acf(x, na.action = na.pass, plot = FALSE)
+  n  <- sum(!is.na(x))
+  ci <- qnorm(0.975) / sqrt(n)
+
+  lags <- as.numeric(a$lag)[-1]
+  vals <- as.numeric(a$acf)[-1]
+  ci_v <- rep(ci, length(lags))
+
+  plot_ly(x = lags, y = vals, type = "bar", name = nm) %>%
+    add_lines(x = lags, y =  ci_v,  line = list(color = "red", dash = "dash"), showlegend = FALSE) %>%
+    add_lines(x = lags, y = -ci_v,  line = list(color = "red", dash = "dash"), showlegend = FALSE)
+}
+
 subplot(
 list(
 plot_ly(y=d$Rt,type="scatter",mode="lines",name="Rt"),
@@ -75,3 +112,165 @@ lapply(adf,summary)
 ```
 
 Com o modelo sem intercepto, observa-se a existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível.
+
+### (b)
+
+Para escolher o número de defasagens:
+
+```{r}
+d_teste <- d %>%
+  dplyr::select('Rt', 'rt')
+
+# Defasagens para testar 
+p_max <- 20
+
+# Estimação do VAR por OLS, comparando por modelos com regressores diferentes
+mod1 <- VARselect(d_teste, lag.max = p_max, type = "const")
+mod2 <- VARselect(d_teste, lag.max = p_max, type = "trend")
+mod3 <- VARselect(d_teste, lag.max = p_max, type = "both")
+
+# AIC, SC, HQ
+cat("\nConstante")
+print(mod1$selection)
+
+cat("\nTendência")
+print(mod2$selection)
+
+cat("\nAmbos")
+print(mod3$selection)
+
+# Dos resultados:
+p_const <- 2
+p_both <- 1
+
+```
+
+As escolhas razoáveis são, nessa lógica, p = 1 ou p = 2.
+
+Estimando os modelos VAR(p) em ambas as hipóteses:
+
+```{r}
+# Modelos
+var1 <- VAR(d_teste, p = p_const, type = "const", season = NULL, exogen = NULL)
+var2 <- VAR(d_teste, p = p_both, type = "both", season = NULL, exogen = NULL)
+
+# 3. Criar uma Lista Nomeada de Modelos para o Loop
+modelos <- list(
+  "VAR(1)" = var1,
+  "VAR(2)" = var2
+)
+
+for (nome in names(modelos)) {
+  modelo_atual <- modelos[[nome]]
+  print(summary(modelo_atual))
+}
+```
+
+```{r}
+# Definições de testes
+tipos_serial <- c("PT.asymptotic", "PT.adjusted")
+lags_teste <- 20 
+
+for (nome in names(modelos)) {
+  
+  modelo_atual <- modelos[[nome]]
+  
+  cat("Resultados para:", nome, "\n")
+  
+  cat("\n Autocorrelação Serial \n")
+  
+  for (tipo in tipos_serial) {
+    cat("\n", tipo ,"\n")
+    teste_serial <- serial.test(modelo_atual, lags.pt = lags_teste, type = tipo)
+    print(teste_serial)
+  }
+  
+  # Normalidade
+  cat("Normalidade dos resíduos (Jarque-Bera) \n")
+  teste_normalidade <- normality.test(modelo_atual)
+  print(teste_normalidade)
+  
+  
+  # ARCH
+  cat(" Heteroscedasticidade dos resíduos \n")
+  teste_hetero <- arch.test(modelo_atual)
+  print(teste_hetero)
+}
+```
+
+Ambos com efeitos ARCH e distriuibição não-normal. Realizar mais testes.
+
+Realizando o teste de cointegração de Johansen:
+
+```{r}
+# type: trace (traço da matriz) ou eigen (autovalores)
+# K: lags
+# ecdet: termos constantes ou de tendência na cointegração
+# spec: efeitos transitórios ou de lonog-prazo
+
+teste_johansen <- ca.jo(d_teste, type = "trace", K = p_const, ecdet = "const", spec = "longrun")
+
+# Resumo dos resultados do teste de Johansen
+summary(teste_johansen)
+```
+
+Pela coluna "values of test statistic", rejeitamos grau $r = 0$ e não rejeitamos grau $r\leq1$, ou seja, o grau de cointegração é rc = 1.
+
+```{r}
+rc <- 1
+
+
+# O vetor de cointegração beta (Vetor de Longo Prazo)
+cat("\nVetor de Cointegração (Beta) normalizado para Rt:\n")
+vetor_beta <- summary(teste_johansen)@V[, rc]
+  print(vetor_beta / vetor_beta[1]) # Normalização (se for o caso)
+
+# Estimar o VECM (Usando r_cointegracao)
+vecm_estimado <- cajorls(teste_johansen, r = rc)
+cat("\nEstimação do VECM:\n")
+print(summary(vecm_estimado))
+  
+# A matriz Alpha (Alpha) contém os coeficientes de correção de erro.
+cat("\nMatriz dos coeficientes:\n")
+print(vecm_estimado$rlm$coefficients["ect1",])
+
+```
+
+### (c)
+
+```{r}
+# Isolando St e drt 
+dados_pvm <- d %>%
+  dplyr::select(St, drt) %>%
+  drop_na()
+
+# Repetindo o processo para verificar se a seleção dos lags está correta 
+selecao_pvm <- VARselect(dados_pvm, lag.max = 10, type = "const")
+selecao_pvm$selection
+
+```
+
+Escolhendo novamente por Scwharz (corroborado pelo Hannan-Quinn):
+
+```{r}
+p_pvm <- 2
+
+# VAR(p) com as novas variáveis
+var_pvm <- VAR(dados_pvm, p = p_pvm, type = "const", season = NULL, exogen = NULL)
+
+#Resultados
+print(summary(var_pvm))
+
+```
+
+```{r}
+# Teste de Wald
+teste_granger_drt_em_st <- causality(var_pvm, cause = "drt")
+cat("\n H0: Δrt não Granger-causa St\n")
+print(teste_granger_drt_em_st$Granger)
+
+teste_granger_st_em_drt <- causality(var_pvm, cause = "St")
+cat("\n H0: St não Granger-causa Δrt\n")
+print(teste_granger_st_em_drt$Granger)
+
+```
