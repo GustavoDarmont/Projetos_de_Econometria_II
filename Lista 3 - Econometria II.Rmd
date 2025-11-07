@@ -18,17 +18,18 @@ library(vars)
 library(tidyverse)
 library(tinytex)
 library(aod)
+library(htmltools)
 ```
 
 ```{r}
 # RDS 
 # d <- read_xlsx("shiller_2013.xlsx")[,c("Short_R","Long_R")]
 # saveRDS(d,"shiller_rates.rds")
-# d_raw2 <- readRDS("shiller_rates.rds")
+d_raw <- readRDS("shiller_rates.rds")
 
 # Excel direto 
-d_raw <- read_xlsx("shiller_2013.xlsx") %>%
-dplyr::select('Year','Short_R', 'Long_R')
+#d_raw <- read_xlsx("shiller_2013.xlsx") %>%
+#dplyr::select('Year','Short_R', 'Long_R')
 
 d <- d_raw %>%
   transmute(
@@ -274,3 +275,88 @@ cat("\n H0: St não Granger-causa Δrt\n")
 print(teste_granger_st_em_drt$Granger)
 
 ```
+
+### (d)
+```{r d1 , echo=FALSE}
+
+d_vecm_ordered <- d %>%
+  dplyr::select('rt', 'Rt') %>%
+  drop_na()
+
+teste_johansen_ordered <- ca.jo(d_vecm_ordered, 
+                                type = "trace", 
+                                K = p_const, 
+                                ecdet = "const", 
+                                spec = "longrun")
+
+var_from_vecm <- vec2var(teste_johansen_ordered, r = rc)
+
+
+irf_vecm <- irf(var_from_vecm, n.ahead = 20, boot = TRUE, ci = 0.95)
+
+plot_irf_gg <- function(irf_obj, impulse_var, response_var) {
+  
+  irf_data <- data.frame(
+    Estimate = irf_obj$irf[[impulse_var]][, response_var],
+    Lower = irf_obj$Lower[[impulse_var]][, response_var],
+    Upper = irf_obj$Upper[[impulse_var]][, response_var]
+  ) %>%
+    mutate(Horizon = 0:(n() - 1))
+  
+  gg <- ggplot(irf_data, aes(x = Horizon)) +
+    geom_ribbon(aes(ymin = Lower, ymax = Upper), fill = "red", alpha = 0.2, linetype = "dotted") +
+    geom_line(aes(y = Estimate), color = "black", linetype = "dotdash") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+    labs(y = paste("Resposta:", response_var),
+         x = "Horizonte (Períodos)",
+         title = NULL) + 
+    theme_minimal()
+  
+  return(gg) 
+}
+
+p_rt_rt <- plot_irf_gg(irf_vecm, impulse_var = "rt", response_var = "rt")
+p_rt_Rt <- plot_irf_gg(irf_vecm, impulse_var = "rt", response_var = "Rt")
+p_Rt_rt <- plot_irf_gg(irf_vecm, impulse_var = "Rt", response_var = "rt")
+p_Rt_Rt <- plot_irf_gg(irf_vecm, impulse_var = "Rt", response_var = "Rt")
+
+cat("\n--- Funções de Impulso-Resposta (IRF) Interativas ---\n")
+
+plot1 <- ggplotly(p_rt_rt)
+plot2 <- ggplotly(p_rt_Rt)
+plot3 <- ggplotly(p_Rt_rt)
+plot4 <- ggplotly(p_Rt_Rt)
+
+
+subplot_rt <- subplot(plot1, plot2, nrows = 2, shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Impulso em 'rt' (Taxa Curta)", y = 0.98)) 
+
+
+subplot_Rt <- subplot(plot3, plot4, nrows = 2, shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Impulso em 'Rt' (Taxa Longa)", y = 0.98)) 
+
+
+tagList(
+  subplot_rt,
+  subplot_Rt,
+)
+```
+O primeiro gráfico mede a resposta das variáveis a um choque na taxa curta ($r_t$), note que tanto a taxa curta ($r_t$) quanto a longa ($R_t$) sofrem impacto significativo e maior que 0.5 mesmo nos maiores lags.
+
+Já o segundo gráfico mede a resposta das variáveis a um choque na taxa longa ($R_t$), note que enquanto o resultado de $R_t$ é significativamente afetado em todos os lags, o impacto na taxa curta ($r_t$) não é estatisticamente diferente de 0 nos primeiros lags, e só nos lags mais longos o impacto passa a ser estatisticamente significativo e diferente de 0.
+
+Esses resultados estão em linha com a abordagem adotada de utilizar $r_t$ como a variável mais exógena.
+
+```{r d2 , echo=FALSE}
+fevd_vecm <- fevd(var_from_vecm, n.ahead = 20)
+cat("\n--- Decomposição da Variância do Erro de Previsão (FEVD) ---\n")
+print(fevd_vecm)
+
+```
+Os resultados da Decomposição de Cholesky parecem corroborar a ideia de usar o $r_t$ como variável mais exógena. Analisando primeiramente $r_t$, percebemos que, como esperado, o erro é explicado 100% por $r_t$ no primeiro lag, o que é coerente com a nossa abordagem, considerando $r_t$ como variável mais exógena. Note, porém, que no lag 20 aproximadamente 83% do erro em $r_t$ é explicado pelo próprio $r_t$, o que dá indícios de que o $r_t$ é de fato pouco impactado por $R_t$, corroborando a ideia de ser a variável mais exógena.
+
+Já analisando os erros de $R_t$, percebemos que, apesar de no início o erro ser explicado em maior parte pelo próprio $R_t$, do lag 6 para frente a decomposição do erro mais ou menos se estabiliza, com $r_t$ explicando cerca de 63% do erro. Essa conclusão indica que o $R_t$ parece ter características de uma variável endógena, novamente confirmando a coerência da abordagem sugerida.
+
+Essa conclusão faz sentido, uma vez que a taxa de juros de curto prazo ($r_t$) costuma ser determinada pelo "policy maker" (Banco Central). Apesar de este costumar ter alguma espécie de modelagem para auxiliar na política monetária, a definição final acaba sendo, de certa forma, discricionária. Dessa forma, acaba sendo de fato uma variável mais exógena, por ter uma correlação clara com a taxa de longo prazo ($R_t$). Esta, por outro lado, é resultado da expectativa do mercado para a economia, que é diretamente influenciada pela política monetária empregada pelo "policy maker" no curto prazo.
+
+
