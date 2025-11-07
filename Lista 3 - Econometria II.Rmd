@@ -359,4 +359,147 @@ Já analisando os erros de $R_t$, percebemos que, apesar de no início o erro se
 
 Essa conclusão faz sentido, uma vez que a taxa de juros de curto prazo ($r_t$) costuma ser determinada pelo "policy maker" (Banco Central). Apesar de este costumar ter alguma espécie de modelagem para auxiliar na política monetária, a definição final acaba sendo, de certa forma, discricionária. Dessa forma, acaba sendo de fato uma variável mais exógena, por ter uma correlação clara com a taxa de longo prazo ($R_t$). Esta, por outro lado, é resultado da expectativa do mercado para a economia, que é diretamente influenciada pela política monetária empregada pelo "policy maker" no curto prazo.
 
+## (e)
 
+Primeiramente, é selecionada uma amostra dos dados de $\Delta R_t$ (primeira diferença da taxa longa) e $\Delta r_t$ (primeira diferença da taxa curta) até 2000. O gráfico abaixo tem por utilidade apenas visualizar de forma breve o comportamento das séries.
+
+```{r}
+d_raw <- readRDS("shiller_rates.rds")
+dRt<-ts(diff(d_raw$Long_R), frequency = 1,end=c(2000))
+drt<-ts(diff(d_raw$Short_R), frequency = 1,end=c(2000))
+
+plot(dRt, ylim=c(min(drt)-.0,6), lwd=2)
+lines(drt, col="blue", lwd=2)
+legend("bottomright", 
+       legend = c("dRt", "drt"), 
+       col = c("black", "blue"), lwd = 2, bty = "n")
+
+dados2000<-cbind(dRt,drt)
+dados2000
+```
+
+É então aplicado o algoritmo de critérios de seleção para verificar qual p adequado ao modelo VAR(p). Abaixo, observamos que p = 4 realiza o melhor ajuste do modelo.
+
+```{r}
+# Critério de Informação (variáveis em nível)
+crit_info<-VARselect(dados2000, lag.max = 12,type = "const")
+crit_info$selection
+```
+
+Treinamos então o modelo VAR(4) sobre os dados selecionados das taxas longa e curta.
+
+```{r}
+# Estimando o modelo VAR
+model1<-VAR(dados2000,p=4, type = "const")
+summary(model1)
+```
+
+Uma vez definidos os parâmetros de melhor ajuste, é aplicada a função predict() para projetar os dados de 2001 a 2012 a partir do modelo treinado.
+
+```{r}
+previsoes <- predict(model1, n.ahead = 12, ci = 0.95)
+print(previsoes)
+```
+
+Selecionando as séries real e projetada para o período de 2001 a 2012, plotam-se os gráficos e as estatísticas descritivas das séries para que se possa analisar os resultados.
+
+```{r}
+dRt_full <- ts(diff(d_raw$Long_R), frequency = 1, start = 1872)
+drt_full <- ts(diff(d_raw$Short_R), frequency = 1, start = 1872)
+dados_full <- cbind(dRt = dRt_full, drt = drt_full)
+
+dados_observados_2001_2012 <- window(dados_full, start = 2001, end = 2012)
+
+## Análise Gráfica
+# Taxa Longa
+fcst_dRt <- previsoes$fcst$dRt
+ts_fcst_dRt <- ts(fcst_dRt, start = 2001, frequency = 1)
+
+plot(dados_observados_2001_2012[, "dRt"],
+     ylim = range(dados_observados_2001_2012[, "dRt"], fcst_dRt),
+     main = "Previsão vs. Observado: dRt (2001-2012)",
+     ylab = "dRt (Diferença da Taxa Longa)",
+     xlab = "Ano",
+     lwd = 2, col = "black")
+
+lines(ts_fcst_dRt[, "fcst"], col = "blue", lwd = 2)
+
+lines(ts_fcst_dRt[, "lower"], col = "blue", lty = 2, lwd = 1)
+lines(ts_fcst_dRt[, "upper"], col = "blue", lty = 2, lwd = 1)
+
+legend("topleft",
+       legend = c("dRt Observado", "dRt Previsto (VAR)", "IC 95%"),
+       col = c("black", "blue", "blue"),
+       lty = c(1, 1, 2),
+       lwd = c(2, 2, 1),
+       bty = "n")
+
+# Taxa Curta
+fcst_drt <- previsoes$fcst$drt
+ts_fcst_drt <- ts(fcst_drt, start = 2001, frequency = 1)
+
+plot(dados_observados_2001_2012[, "drt"],
+     ylim = range(dados_observados_2001_2012[, "drt"], fcst_drt),
+     main = "Previsão vs. Observado: drt (2001-2012)",
+     ylab = "drt (Diferença da Taxa Curta)",
+     xlab = "Ano",
+     lwd = 2, col = "black")
+
+lines(ts_fcst_drt[, "fcst"], col = "red", lwd = 2)
+
+lines(ts_fcst_drt[, "lower"], col = "red", lty = 2, lwd = 1)
+lines(ts_fcst_drt[, "upper"], col = "red", lty = 2, lwd = 1)
+
+legend("topright",
+       legend = c("drt Observado", "drt Previsto (VAR)", "IC 95%"),
+       col = c("black", "red", "red"),
+       lty = c(1, 1, 2),
+       lwd = c(2, 2, 1),
+       bty = "n")
+
+
+## Análise das Estatísticas Descritivas
+dRt_observado <- dados_observados_2001_2012[, "dRt"]
+drt_observado <- dados_observados_2001_2012[, "drt"]
+
+dRt_previsto <- ts_fcst_dRt[, "fcst"]
+drt_previsto <- ts_fcst_drt[, "fcst"]
+
+comparacao_df <- data.frame(
+  dRt_Observado = as.numeric(dRt_observado),
+  dRt_Previsto  = as.numeric(dRt_previsto),
+  drt_Observado = as.numeric(drt_observado),
+  drt_Previsto  = as.numeric(drt_previsto)
+)
+
+stats_func <- function(x) {
+  c(
+    Media = mean(x, na.rm = TRUE),
+    Desvio_Pad = sd(x, na.rm = TRUE),
+    Minimo = min(x, na.rm = TRUE),
+    Maximo = max(x, na.rm = TRUE)
+  )
+}
+
+estatisticas <- sapply(comparacao_df, stats_func)
+
+print("Estatísticas das Séries")
+print(t(estatisticas))
+
+# Verificando o alargamento do intervalo de confiança
+fcst_dRt <- previsoes$fcst$dRt
+
+largura_h1 <- fcst_dRt[1, "upper"] - fcst_dRt[1, "lower"]
+print(paste("Largura do IC em h=1 (2001):", largura_h1))
+
+largura_h12 <- fcst_dRt[12, "upper"] - fcst_dRt[12, "lower"]
+print(paste("Largura do IC em h=12 (2012):", largura_h12))
+```
+
+A partir da análise gráfica e das estatísticas descritivas, percebe-se uma maior estabilidade dos dados projetados pelo modelo VAR(4) frente aos dados reais de 2001 a 2012.
+
+Isso é confirmado pela comparação do desvio padrão e dos valores extremos (mínimos e máximos): a série observada é visivelmente mais volátil do que a série prevista. Contudo, essa discrepância na volatilidade é esperada, o modelo foi treinado com dados de 1872 até 2000, esse longo período tende a dissipar os choques pelo volume de dados e, assim, não poderia antecipar choques estruturais ou a elevada volatilidade subsequente, como a causada pela crise financeira de 2008.
+
+Em contrapartida, as médias das séries projetadas e observadas não divergem drasticamente. Além disso, o fato de as médias observadas no período de validação serem próximas de zero (para $\Delta R_t$ e $\Delta r_t$) é um ponto importante, pois reforça a suposição de estacionariedade (ausência de drift ou tendência determinística) que foi usada ao modelar as primeiras diferenças.
+
+Além disso, é notável que quase todas as observações do período (com exceção da Taxa Longa em 2001) encontram-se dentro do intervalo de confiança de 95% projetado. Embora isso não implique um bom poder preditivo pontual (dado que os intervalos de confiança se alargam com o tempo), demonstra que os choques reais, mesmo que grandes, não foram estatisticamente "impossíveis" (ou seja, eventos com menos de 5% de chance) sob a ótica da distribuição de previsão do modelo. Conforme observado, a volatilidade da Taxa Longa (dRt) real aumenta a partir de 2008, uma provável consequência da crise financeira que o modelo treinado até 2000 não poderia prever. É igualmente interessante notar que a Taxa Curta (drt) não acompanhou esse salto de volatilidade, sugerindo uma divergência na dinâmica das taxas no período subsequete à crise.
