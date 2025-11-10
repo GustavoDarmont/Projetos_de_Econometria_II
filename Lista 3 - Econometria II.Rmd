@@ -19,17 +19,19 @@ library(tidyverse)
 library(tinytex)
 library(aod)
 library(htmltools)
+library(systemfit) 
+library(car)       
 ```
 
 ```{r}
 # RDS 
 # d <- read_xlsx("shiller_2013.xlsx")[,c("Short_R","Long_R")]
 # saveRDS(d,"shiller_rates.rds")
-d_raw <- readRDS("shiller_rates.rds")
+# d_raw <- readRDS("shiller_rates.rds")
 
 # Excel direto 
-#d_raw <- read_xlsx("shiller_2013.xlsx") %>%
-#dplyr::select('Year','Short_R', 'Long_R')
+d_raw <- read_xlsx("shiller_2013.xlsx") %>%
+dplyr::select('Short_R', 'Long_R')
 
 d <- d_raw %>%
   transmute(
@@ -64,7 +66,7 @@ plot_ly(y=d$drt,type="scatter",mode="lines",name="Δrt")
 )
 ```
 
-Visualmente, nota-se que as séries das taxas longa ($R_t$) e curta ($r_t$) exibem trajetórias parecidas, boscilando em torno de um nível médio e sem tendência determinística clara, com prolongada persistência, indicando possivelmente a existência de raiz unitária. O spread ($S_t = R_t - r_t$) apresenta flutuações de menor amplitude, com valores positivos e negativos, sugerindo estacionariedade. Já a variação da taxa curta ($\Delta r_t$) mostra comportamento mais errático, com oscilações pontuais em torno de zero e sem padrão persistente, similar a um ruído branco.
+Visualmente, nota-se que as séries das taxas longa ($R_t$) e curta ($r_t$) exibem trajetórias parecidas, oscilando em torno de um nível médio e sem tendência determinística clara, com prolongada persistência, indicando possivelmente a existência de raiz unitária. O spread ($S_t = R_t - r_t$) apresenta flutuações de menor amplitude, com valores positivos e negativos, sugerindo estacionariedade. Já a variação da taxa curta ($\Delta r_t$) mostra comportamento mais errático, com oscilações pontuais em torno de zero e sem padrão persistente, similar a um ruído branco.
 
 # Análise visual da ACF
 
@@ -99,7 +101,6 @@ adf<-list(
 )
 lapply(adf,summary)
 ```
-
 Três dos quatro modelos não apresentaram intercepto com significância estatística. Dessa forma, a especificação em formato de passeio aleatório foi adotada por ausência de tendência determinística e de intercepto estatisticamente significativo, conforme indicado tanto pela inspeção visual das séries quanto pelos testes sob “drift”, cujos interceptos foram insignificantes.
 
 ```{r}
@@ -112,7 +113,7 @@ adf<-list(
 lapply(adf,summary)
 ```
 
-Com o modelo sem intercepto, observa-se a existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível.
+Com o modelo sem intercepto, não se rejeita a hipótese nula de existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível (parâmetro de regressão à média, por simplificação). Logo, assumiremos $R_t$ e $r_t$ não-estacionárias e $S_t$ e $\Delta_t$ estacionárias.
 
 ### (b)
 
@@ -131,13 +132,13 @@ mod2 <- VARselect(d_teste, lag.max = p_max, type = "trend")
 mod3 <- VARselect(d_teste, lag.max = p_max, type = "both")
 
 # AIC, SC, HQ
-cat("\nConstante")
+cat("\nConstante\n")
 print(mod1$selection)
 
-cat("\nTendência")
+cat("\nTendência\n")
 print(mod2$selection)
 
-cat("\nAmbos")
+cat("\nAmbos\n")
 print(mod3$selection)
 
 # Dos resultados:
@@ -146,137 +147,219 @@ p_both <- 1
 
 ```
 
-As escolhas razoáveis são, nessa lógica, p = 1 ou p = 2.
+As escolhas razoáveis são, nessa lógica, p = 1 (com constante e elemento de tendência) ou p = 2 (com termo constante sem tendência).
 
 Estimando os modelos VAR(p) em ambas as hipóteses:
 
 ```{r}
 # Modelos
-var1 <- VAR(d_teste, p = p_const, type = "const", season = NULL, exogen = NULL)
-var2 <- VAR(d_teste, p = p_both, type = "both", season = NULL, exogen = NULL)
+var2 <- VAR(d_teste, p = p_const, type = "const", season = NULL, exogen = NULL)
+var1 <- VAR(d_teste, p = p_both, type = "both", season = NULL, exogen = NULL)
 
-# 3. Criar uma Lista Nomeada de Modelos para o Loop
+# Lista para o loop:
 modelos <- list(
   "VAR(1)" = var1,
   "VAR(2)" = var2
 )
 
 for (nome in names(modelos)) {
+  cat("Resultados para:", nome, "\n")
   modelo_atual <- modelos[[nome]]
   print(summary(modelo_atual))
 }
 ```
 
-```{r}
-# Definições de testes
-tipos_serial <- c("PT.asymptotic", "PT.adjusted")
-lags_teste <- 20 
+Dado que ambos os modelos possuem resultados estatisticamente significantes, o critério para escolha do modelo mais apropriado será pelos testes diagnósticos:
 
-for (nome in names(modelos)) {
-  
-  modelo_atual <- modelos[[nome]]
-  
-  cat("Resultados para:", nome, "\n")
-  
+```{r}
+# Função para diagnóstico
+diagnosis <- function(modelo) {
+  # Autocorrelação 
   cat("\n Autocorrelação Serial \n")
-  
-  for (tipo in tipos_serial) {
-    cat("\n", tipo ,"\n")
-    teste_serial <- serial.test(modelo_atual, lags.pt = lags_teste, type = tipo)
-    print(teste_serial)
-  }
+  print(serial.test(modelo))
   
   # Normalidade
-  cat("Normalidade dos resíduos (Jarque-Bera) \n")
-  teste_normalidade <- normality.test(modelo_atual)
-  print(teste_normalidade)
-  
+  cat("\n Normalidade dos resíduos (Jarque-Bera) \n")
+  print(normality.test(modelo))
   
   # ARCH
-  cat(" Heteroscedasticidade dos resíduos \n")
-  teste_hetero <- arch.test(modelo_atual)
-  print(teste_hetero)
+  cat("\n Heteroscedasticidade dos resíduos \n")
+  print(arch.test(modelo))
 }
+
+cat("VAR(1) com constante e termo de tendência de LP \n")
+diagnosis(var1)
+cat("VAR(2) com constante \n")
+diagnosis(var2)
 ```
 
-Ambos com efeitos ARCH e distriuibição não-normal. Realizar mais testes.
+Comparando os testes de Portmanteau (Ljung-Box) dos modelos, vemos que o VAR(1) tem hipótese nula de ausência de autocorrelação serial rejeitada a 8%, enquanto o VAR(2) tem p valor na casa dos 28%, ou seja, há mais confiança na especificação do segundo caso. Quanto a normalidade dos resíduos e heteroscedasticidade condicional, ambos os modelos possuem resíduos distribuídos de forma não-normal e clusters de volatilidade, fazendo do primeiro critério de comparação o definitivo para escolher o VAR(2).
 
-Realizando o teste de cointegração de Johansen:
+Tendo escolhido o VAR(2), realiza-se o teste de cointegração de Johansen para determinar o vetor de cointegração das séries:
 
 ```{r}
 # type: trace (traço da matriz) ou eigen (autovalores)
 # K: lags
-# ecdet: termos constantes ou de tendência na cointegração
-# spec: efeitos transitórios ou de lonog-prazo
+# ecdet: termos constantes ou de tendência na cointegração (não utilizado por simplicidade)
 
-teste_johansen <- ca.jo(d_teste, type = "trace", K = p_const, ecdet = "const", spec = "longrun")
+#Pelo traço da matriz:
+tj_trace <- ca.jo(d_teste, type = "trace", K = 2, ecdet = "none")
+
+#Pelos autovalores:
+tj_eigen <- ca.jo(d_teste, type = "eigen", K = 2, ecdet = "none")
 
 # Resumo dos resultados do teste de Johansen
-summary(teste_johansen)
+cat("\n Teste por traço: \n")
+summary(tj_trace)
+cat("\n Teste por autovalores \n")
+summary(tj_eigen)
 ```
 
-Pela coluna "values of test statistic", rejeitamos grau $r = 0$ e não rejeitamos grau $r\leq1$, ou seja, o grau de cointegração é rc = 1.
+É notável que ambos os comandos (eigen ou trace) retornam o mesmo teste, então a interpretação não varia. Pela coluna "values of test statistic", rejeitamos grau $r = 0$ e não rejeitamos grau $r\leq1$, ou seja, o grau de cointegração é rc = 1 (existe pelo menos um vetor de cointegração). Disso, podemos isolar o vetor de cointegração e visualizar o gráfico da série cointegrada:
 
 ```{r}
 rc <- 1
 
-
-# O vetor de cointegração beta (Vetor de Longo Prazo)
+# Vetor de cointegração de longo prazo:
 cat("\nVetor de Cointegração (Beta) normalizado para Rt:\n")
-vetor_beta <- summary(teste_johansen)@V[, rc]
+vetor_beta <- summary(tj_trace)@V[, rc]
   print(vetor_beta / vetor_beta[1]) # Normalização (se for o caso)
 
-# Estimar o VECM (Usando r_cointegracao)
-vecm_estimado <- cajorls(teste_johansen, r = rc)
-cat("\nEstimação do VECM:\n")
-print(summary(vecm_estimado))
-  
-# A matriz Alpha (Alpha) contém os coeficientes de correção de erro.
-cat("\nMatriz dos coeficientes:\n")
-print(vecm_estimado$rlm$coefficients["ect1",])
+# Gráfico da cointegração (combinação linear resultante)
+beta1<-tj_trace@V
+serie_coint <- as.matrix(d_teste) %*% beta1[, 1] 
+
+# Visualizar a série de cointegração
+plot(serie_coint, type = "l", main = "Série cointegrada", 
+     ylab = "Combinação Linear Cointegrada", xlab = "Tempo")
+abline(h=mean(serie_coint), col="red") # linha horiz. = média de serie_coint1
+```
+
+O vetor de cointegração ecnontrado foi (1, -1.0707). Rodando o comando para cálculo do VECM, podemos corroborar o achado e, por fim, montar as equações do modelo:
+
+```{r}
+# VECM
+cat('\n Coeficientes do VECM \n')
+vecm1 <- cajorls(tj_trace, r = 1)
+vecm1
+
+# VECM em forma VAR
+cat('\n Coeficientes da representação VAR(2) \n')
+vecm2var1<- vec2var(tj_trace,r=1)
+vecm2var1
 
 ```
+Com isso, o modelo VECM assume a seguinte forma (note que o vetor beta calculado confere com o exposto nesses comandos):
+$$\begin{pmatrix} \Delta R_t \\ \Delta r_t \end{pmatrix} = \underbrace{ \begin{pmatrix} -0.0576 \\ 0.3006 \end{pmatrix} }_{\alpha} \underbrace{ \begin{pmatrix} 1.00 & -1.0707 \end{pmatrix} }_{\beta'} \begin{pmatrix} R_{t-1} \\ r_{t-1} \end{pmatrix} + \underbrace{ \begin{pmatrix} -0.4889 & 0.2560 \\ 0.0173 & -0.1653 \end{pmatrix} }_{\Gamma_1} \begin{pmatrix} \Delta R_{t-1} \\ \Delta r_{t-1} \end{pmatrix} + \underbrace{ \begin{pmatrix} -0.0441 \\ 0.0669 \end{pmatrix} }_{C_0} + \begin{pmatrix} \epsilon_{R,t} \\ \epsilon_{r,t} \end{pmatrix} $$
+Esse VECM possui, fazendo o caminho contrário do Teorema da Identificação de Granger, uma forma VAR(2), tal qual:
+$$
+\begin{pmatrix} R_t \\ r_t \end{pmatrix}
+=
+\underbrace{
+\begin{pmatrix} 0.5111 & 0.2560 \\ 0.0173 & 0.8347 \end{pmatrix}
+}_{A_1}
+\begin{pmatrix} R_{t-1} \\ r_{t-1} \end{pmatrix}
++
+\underbrace{
+\begin{pmatrix} 0.4313 & -0.1943 \\ 0.2832 & -0.1565 \end{pmatrix}
+}_{A_2}
+\begin{pmatrix} R_{t-2} \\ r_{t-2} \end{pmatrix}
++
+\underbrace{
+\begin{pmatrix} -0.0441 \\ 0.0669 \end{pmatrix}
+}_{C_0}
++
+\begin{pmatrix} \epsilon_{R,t} \\ \epsilon_{r,t} \end{pmatrix}
+$$
 
 ### (c)
 
+Montando o VAR com a mesma metodologia do item anterior, mas agora para $ S_t $ e $\Delta r_t $:
 ```{r}
-# Isolando St e drt 
+
+# Isolando St e drt, criando as séries com lag para avaliar as restrições do modelo de valor presente:
+
 dados_pvm <- d %>%
-  dplyr::select(St, drt) %>%
-  drop_na()
+  dplyr::select(St, drt) 
+  
+
+dados_lags <- dados_pvm %>%
+   mutate(
+    St.l1 = lag(St, 1),
+    St.l2 = lag(St, 2),
+    drt.l1 = lag(drt, 1),
+    drt.l2 = lag(drt, 2)
+  )
+  
 
 # Repetindo o processo para verificar se a seleção dos lags está correta 
-selecao_pvm <- VARselect(dados_pvm, lag.max = 10, type = "const")
+selecao_pvm <- VARselect(na.omit(dados_pvm), lag.max = 10, type = "const")
+cat('\n Retorno dos critérios \n')
 selecao_pvm$selection
 
-```
-
-Escolhendo novamente por Scwharz (corroborado pelo Hannan-Quinn):
-
-```{r}
 p_pvm <- 2
 
 # VAR(p) com as novas variáveis
-var_pvm <- VAR(dados_pvm, p = p_pvm, type = "const", season = NULL, exogen = NULL)
+var_pvm <- VAR(na.omit(dados_pvm), p = p_pvm, type = "const", season = NULL, exogen = NULL)
 
 #Resultados
 print(summary(var_pvm))
 
 ```
+Para verificar se o modelo atende às condições de um Modelo de Valor Presente (PVM), há de se verificar se ele atende à seguinte especificação, sendo $\delta$ a taxa de desconto intertemporal:
+
+$$S_t + \Delta r_t = \frac{1}{\delta} S_{t-1} + \mu_t$$
+No caso de um VAR(2), soma-se as duas equações a seguir para se chegar na original por manipulação algébrica:
+$$
+\begin{align*}
+S_t &= a_1 S_{t-1} + a_2 S_{t-2} + b_1 \Delta r_{t-1} + b_2 \Delta r_{t-2} + u_{1t} \\
+\Delta r_t &= c_1 S_{t-1} + c_2 S_{t-2} + d_1 \Delta r_{t-1} + d_2 \Delta r_{t-2} + u_{2t}
+\end{align*}
+$$
+Ou seja, devemos testar as seguintes restrições no teste de Wald: 
+$$H_0 : \begin{cases} a_1 + c_1 = \frac{1}{\delta} \\ a_2 + c_2 = 0 \\ b_1 + d_1 = 0 \\ b_2 + d_2 = 0 \end{cases} $$
 
 ```{r}
-# Teste de Wald
-teste_granger_drt_em_st <- causality(var_pvm, cause = "drt")
-cat("\n H0: Δrt não Granger-causa St\n")
-print(teste_granger_drt_em_st$Granger)
+#------------------------------ Setup do teste de Wald------------------------------
+# Dado p=2:
+eqSt <- St ~ St.l1 + St.l2 + drt.l1 + drt.l2
+eqdrt <- drt ~ St.l1 + St.l2 + drt.l1 + drt.l2
 
-teste_granger_st_em_drt <- causality(var_pvm, cause = "St")
-cat("\n H0: St não Granger-causa Δrt\n")
-print(teste_granger_st_em_drt$Granger)
+# Juntando  as equações em uma lista:
+eq_sistema <- list(eqSt, eqdrt)
+
+# Estimando o sistema com seemingly unrelated (SUR):
+var_sur <- systemfit(eq_sistema, data = na.omit(dados_lags), method = "OLS")
+
+# Adotando um delta (desconto intertemporal) arbitrário entre 0.9 e 0.99
+delta <- 0.91 
+inv_delta <- 1 / delta
+
+# Legenda de coeficientes:
+# a1 = eq1_St.l1,  c1 = eq2_St.l1
+# a2 = eq1_St.l2,  c2 = eq2_St.l2
+# b1 = eq1_drt.l1, d1 = eq2_drt.l1
+# b2 = eq1_drt.l2, d2 = eq2_drt.l2
+
+# 2*p = 4 restrições do teste a ser feito:
+restricoes_pvm <- c(
+  paste("eq1_St.l1 + eq2_St.l1 =", inv_delta), # a1 + c1 = 1/delta
+  "eq1_St.l2 + eq2_St.l2 = 0",                 # a2 + c2 = 0
+  "eq1_drt.l1 + eq2_drt.l1 = 0",               # b1 + d1 = 0
+  "eq1_drt.l2 + eq2_drt.l2 = 0"                # b2 + d2 = 0
+)
+
+# ----------------------Executar e interpretar o Teste de Wald -----------------------
+teste_wald_pvm <- linearHypothesis(var_sur, restricoes_pvm)
+cat("\nTeste de Wald para as condições do PVM (H0: Restrições são válidas):\n")
+print(teste_wald_pvm)
+
 
 ```
+Como o p-valor (Pr(>F)) > 0.05, temos um teste F em que a hipótese nula não é rejeitada, isto é, as restrições do PVM são estatisticamente significantes, portanto válidas.
 
 ### (d)
+
 ```{r d1 , echo=FALSE}
 
 d_vecm_ordered <- d %>%
@@ -341,6 +424,7 @@ tagList(
   subplot_Rt,
 )
 ```
+
 O primeiro gráfico mede a resposta das variáveis a um choque na taxa curta ($r_t$), note que tanto a taxa curta ($r_t$) quanto a longa ($R_t$) sofrem impacto significativo e maior que 0.5 mesmo nos maiores lags.
 
 Já o segundo gráfico mede a resposta das variáveis a um choque na taxa longa ($R_t$), note que enquanto o resultado de $R_t$ é significativamente afetado em todos os lags, o impacto na taxa curta ($r_t$) não é estatisticamente diferente de 0 nos primeiros lags, e só nos lags mais longos o impacto passa a ser estatisticamente significativo e diferente de 0.
@@ -353,6 +437,7 @@ cat("\n--- Decomposição da Variância do Erro de Previsão (FEVD) ---\n")
 print(fevd_vecm)
 
 ```
+
 Os resultados da Decomposição de Cholesky parecem corroborar a ideia de usar o $r_t$ como variável mais exógena. Analisando primeiramente $r_t$, percebemos que, como esperado, o erro é explicado 100% por $r_t$ no primeiro lag, o que é coerente com a nossa abordagem, considerando $r_t$ como variável mais exógena. Note, porém, que no lag 20 aproximadamente 83% do erro em $r_t$ é explicado pelo próprio $r_t$, o que dá indícios de que o $r_t$ é de fato pouco impactado por $R_t$, corroborando a ideia de ser a variável mais exógena.
 
 Já analisando os erros de $R_t$, percebemos que, apesar de no início o erro ser explicado em maior parte pelo próprio $R_t$, do lag 6 para frente a decomposição do erro mais ou menos se estabiliza, com $r_t$ explicando cerca de 63% do erro. Essa conclusão indica que o $R_t$ parece ter características de uma variável endógena, novamente confirmando a coerência da abordagem sugerida.
