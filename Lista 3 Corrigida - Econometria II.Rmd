@@ -1,0 +1,695 @@
+---
+title: "Lista 3 - Econometria II"
+author: "Augusto Floriano, Danyel Lima, Fernando Cruz e Gustavo Darmont"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+
+# Bibliotecas utilizadas
+library(readxl)
+library(dplyr)
+library(plotly)
+library(urca)
+library(tseries)
+library(vars)
+library(tidyverse)
+library(tinytex)
+library(aod)
+library(htmltools)
+library(systemfit) 
+library(car)       
+```
+
+### (a)
+
+```{r}
+# RDS 
+# d <- read_xlsx("shiller_2013.xlsx")[,c("Short_R","Long_R")]
+# saveRDS(d,"shiller_rates.rds")
+# d_raw <- readRDS("shiller_rates.rds")
+
+# Excel direto 
+d_raw <- read_xls("shiller_2013.xls") %>%
+dplyr::select('Short_R', 'Long_R')
+
+d <- d_raw %>%
+  transmute(
+    Rt  = Long_R,
+    rt  = Short_R,
+    St  = Long_R - Short_R,
+    drt = c(NA, diff(Short_R)),
+    dRt = c(NA, diff(Long_R))
+)
+
+f.acf <- function(x, nm) {
+  a  <- acf(x, na.action = na.pass, plot = FALSE)
+  n  <- sum(!is.na(x))
+  ci <- qnorm(0.975) / sqrt(n)
+
+  lags <- as.numeric(a$lag)[-1]
+  vals <- as.numeric(a$acf)[-1]
+  ci_v <- rep(ci, length(lags))
+
+  plot_ly(x = lags, y = vals, type = "bar", name = nm) %>%
+    add_lines(x = lags, y =  ci_v,  line = list(color = "red", dash = "dash"), showlegend = FALSE) %>%
+    add_lines(x = lags, y = -ci_v,  line = list(color = "red", dash = "dash"), showlegend = FALSE)
+}
+
+subplot(
+list(
+plot_ly(y=d$Rt,type="scatter",mode="lines",name="Rt"),
+plot_ly(y=d$rt,type="scatter",mode="lines",name="rt"),
+plot_ly(y=d$St,type="scatter",mode="lines",name="St"),
+plot_ly(y=d$drt,type="scatter",mode="lines",name="Δrt")
+),nrows=2,shareX=FALSE,shareY=FALSE,margin=0.05
+)
+```
+
+Visualmente, nota-se que as séries das taxas longa ($R_t$) e curta ($r_t$) exibem trajetórias parecidas, oscilando em torno de um nível médio e sem tendência determinística clara, com prolongada persistência, indicando possivelmente a existência de raiz unitária. O spread ($S_t = R_t - r_t$) apresenta flutuações de menor amplitude, com valores positivos e negativos, sugerindo estacionariedade. Já a variação da taxa curta ($\Delta r_t$) mostra comportamento mais errático, com oscilações pontuais em torno de zero e sem padrão persistente, similar a um ruído branco.
+
+# Análise visual da ACF
+
+```{r}
+f.acf<-function(x,nm){
+a<-acf(x,na.action=na.pass,plot=FALSE);n<-sum(!is.na(x));ci<-qnorm(0.975)/sqrt(n)
+lags<-as.numeric(a$lag)[-1];vals<-as.numeric(a$acf)[-1];ci_v<-rep(ci,length(lags))
+plot_ly(x=lags,y=vals,type="bar",name=nm)%>%
+add_lines(x=lags,y= ci_v,line=list(color="red",dash="dash"),showlegend=FALSE)%>%
+add_lines(x=lags,y=-ci_v,line=list(color="red",dash="dash"),showlegend=FALSE)
+}
+subplot(
+list(
+f.acf(d$Rt,"Rt"),
+f.acf(d$rt,"rt"),
+f.acf(d$St,"St"),
+f.acf(d$drt,"Δrt")
+),nrows=2,shareX=FALSE,shareY=FALSE,margin=0.05
+)
+```
+
+A ACF do $R_t$ é positiva e indica um decaimento consideravelmente lento, e longo, num ritmo quase que constante, indicando possivelmente a presença de raiz unitária. Da mesma forma, também se observa uma elevada persistência para $r_t$, cruzando a banda superior do limite do intervalo de confiança somente no lag $16$ e indicando a possibilidade de raiz unitária. No ACF do spread, observa-se uma maior oscilação mas ainda com maior parte dos lags fora do intervalo de confiança. Comportamento totalmente distinto se observa no $Δr_t$, com barras menores, quase todas dentro do intervalo de confiança, e aparentando ruido.
+
+# Testes de raiz unitária
+
+```{r}
+adf<-list(
+ "Rt" =ur.df(na.omit(d$Rt), type="drift", selectlags="AIC"),
+ "rt" =ur.df(na.omit(d$rt), type="drift", selectlags="AIC"),
+ "St" =ur.df(na.omit(d$St), type="drift", selectlags="AIC"),
+ "Δrt"=ur.df(na.omit(d$drt),type="drift",selectlags="AIC")
+)
+lapply(adf,summary)
+```
+Três dos quatro modelos não apresentaram intercepto com significância estatística. Dessa forma, a especificação em formato de passeio aleatório foi adotada por ausência de tendência determinística e de intercepto estatisticamente significativo, conforme indicado tanto pela inspeção visual das séries quanto pelos testes sob “drift”, cujos interceptos foram insignificantes.
+
+```{r}
+adf<-list(
+ "Rt" =ur.df(na.omit(d$Rt), type="none", selectlags="AIC"),
+ "rt" =ur.df(na.omit(d$rt), type="none", selectlags="AIC"),
+ "St" =ur.df(na.omit(d$St), type="none", selectlags="AIC"),
+ "Δrt"=ur.df(na.omit(d$drt),type="none",selectlags="AIC")
+)
+lapply(adf,summary)
+```
+
+Com o modelo sem intercepto, não se rejeita a hipótese nula de existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível (parâmetro de regressão à média, por simplificação). Logo, assumiremos $R_t$ e $r_t$ não-estacionárias e $S_t$ e $\Delta_t$ estacionárias.
+
+### (b)
+
+Para escolher o número de defasagens:
+
+```{r}
+d_teste <- d %>%
+  dplyr::select('Rt', 'rt')
+
+# Defasagens para testar 
+p_max <- 20
+
+# Estimação do VAR por OLS, comparando por modelos com regressores diferentes
+mod1 <- VARselect(d_teste, lag.max = p_max, type = "const")
+mod2 <- VARselect(d_teste, lag.max = p_max, type = "trend")
+mod3 <- VARselect(d_teste, lag.max = p_max, type = "both")
+
+# AIC, SC, HQ
+cat("\nConstante\n")
+print(mod1$selection)
+
+cat("\nTendência\n")
+print(mod2$selection)
+
+cat("\nAmbos\n")
+print(mod3$selection)
+
+# Dos resultados:
+p_const <- 2
+p_both <- 1
+
+```
+
+As escolhas razoáveis são, nessa lógica, p = 1 (com constante e elemento de tendência) ou p = 2 (com termo constante sem tendência).
+
+Estimando os modelos VAR(p) em ambas as hipóteses:
+
+```{r}
+# Modelos
+var2 <- VAR(d_teste, p = p_const, type = "const", season = NULL, exogen = NULL)
+var1 <- VAR(d_teste, p = p_both, type = "both", season = NULL, exogen = NULL)
+
+# Lista para o loop:
+modelos <- list(
+  "VAR(1)" = var1,
+  "VAR(2)" = var2
+)
+
+for (nome in names(modelos)) {
+  cat("Resultados para:", nome, "\n")
+  modelo_atual <- modelos[[nome]]
+  print(summary(modelo_atual))
+}
+```
+
+Dado que ambos os modelos possuem resultados estatisticamente significantes, o critério para escolha do modelo mais apropriado será pelos testes diagnósticos:
+
+```{r}
+# Função para diagnóstico
+diagnosis <- function(modelo) {
+  # Autocorrelação 
+  cat("\n Autocorrelação Serial \n")
+  print(serial.test(modelo))
+  
+  # Normalidade
+  cat("\n Normalidade dos resíduos (Jarque-Bera) \n")
+  print(normality.test(modelo))
+  
+  # ARCH
+  cat("\n Heteroscedasticidade dos resíduos \n")
+  print(arch.test(modelo))
+}
+
+cat("VAR(1) com constante e termo de tendência de LP \n")
+diagnosis(var1)
+cat("VAR(2) com constante \n")
+diagnosis(var2)
+```
+
+Comparando os testes de Portmanteau (Ljung-Box) dos modelos, vemos que o VAR(1) tem hipótese nula de ausência de autocorrelação serial rejeitada a 8%, enquanto o VAR(2) tem p valor na casa dos 28%, ou seja, há mais confiança na especificação do segundo caso. Quanto a normalidade dos resíduos e heteroscedasticidade condicional, ambos os modelos possuem resíduos distribuídos de forma não-normal e clusters de volatilidade, fazendo do primeiro critério de comparação o definitivo para escolher o VAR(2).
+
+Tendo escolhido o VAR(2), realiza-se o teste de cointegração de Johansen para determinar o vetor de cointegração das séries:
+
+```{r}
+# type: trace (traço da matriz) ou eigen (autovalores)
+# K: lags
+# ecdet: termos constantes ou de tendência na cointegração (não utilizado por simplicidade)
+
+#Pelo traço da matriz:
+tj_trace <- ca.jo(d_teste, type = "trace", K = 2, ecdet = "none")
+
+#Pelos autovalores:
+tj_eigen <- ca.jo(d_teste, type = "eigen", K = 2, ecdet = "none")
+
+# Resumo dos resultados do teste de Johansen
+cat("\n Teste por traço: \n")
+summary(tj_trace)
+cat("\n Teste por autovalores \n")
+summary(tj_eigen)
+```
+
+É notável que ambos os comandos (eigen ou trace) retornam o mesmo teste, então a interpretação não varia. Pela coluna "values of test statistic", rejeitamos grau $r = 0$ e não rejeitamos grau $r\leq1$, ou seja, o grau de cointegração é rc = 1 (existe pelo menos um vetor de cointegração). Disso, podemos isolar o vetor de cointegração e visualizar o gráfico da série cointegrada:
+
+```{r}
+rc <- 1
+
+# Vetor de cointegração de longo prazo:
+cat("\nVetor de Cointegração (Beta) normalizado para Rt:\n")
+vetor_beta <- summary(tj_trace)@V[, rc]
+  print(vetor_beta / vetor_beta[1]) # Normalização (se for o caso)
+
+# Gráfico da cointegração (combinação linear resultante)
+beta1<-tj_trace@V
+serie_coint <- as.matrix(d_teste) %*% beta1[, 1] 
+
+# Visualizar a série de cointegração
+plot(serie_coint, type = "l", main = "Série cointegrada", 
+     ylab = "Combinação Linear Cointegrada", xlab = "Tempo")
+abline(h=mean(serie_coint), col="red") # linha horiz. = média de serie_coint1
+```
+
+O vetor de cointegração ecnontrado foi (1, -1.0707). Rodando o comando para cálculo do VECM, podemos corroborar o achado e, por fim, montar as equações do modelo:
+
+```{r}
+# VECM
+cat('\n Coeficientes do VECM \n')
+vecm1 <- cajorls(tj_trace, r = 1)
+vecm1
+
+# VECM em forma VAR
+cat('\n Coeficientes da representação VAR(2) \n')
+vecm2var1<- vec2var(tj_trace,r=1)
+vecm2var1
+
+```
+Com isso, o modelo VECM assume a seguinte forma (note que o vetor beta calculado confere com o exposto nesses comandos):
+$$\begin{pmatrix} \Delta R_t \\ \Delta r_t \end{pmatrix} = \underbrace{ \begin{pmatrix} -0.0576 \\ 0.3006 \end{pmatrix} }_{\alpha} \underbrace{ \begin{pmatrix} 1.00 & -1.0707 \end{pmatrix} }_{\beta'} \begin{pmatrix} R_{t-1} \\ r_{t-1} \end{pmatrix} + \underbrace{ \begin{pmatrix} -0.4889 & 0.2560 \\ 0.0173 & -0.1653 \end{pmatrix} }_{\Gamma_1} \begin{pmatrix} \Delta R_{t-1} \\ \Delta r_{t-1} \end{pmatrix} + \underbrace{ \begin{pmatrix} -0.0441 \\ 0.0669 \end{pmatrix} }_{C_0} + \begin{pmatrix} \epsilon_{R,t} \\ \epsilon_{r,t} \end{pmatrix} $$
+Esse VECM possui, fazendo o caminho contrário do Teorema da Identificação de Granger, uma forma VAR(2), tal qual:
+$$
+\begin{pmatrix} R_t \\ r_t \end{pmatrix}
+=
+\underbrace{
+\begin{pmatrix} 0.5111 & 0.2560 \\ 0.0173 & 0.8347 \end{pmatrix}
+}_{A_1}
+\begin{pmatrix} R_{t-1} \\ r_{t-1} \end{pmatrix}
++
+\underbrace{
+\begin{pmatrix} 0.4313 & -0.1943 \\ 0.2832 & -0.1565 \end{pmatrix}
+}_{A_2}
+\begin{pmatrix} R_{t-2} \\ r_{t-2} \end{pmatrix}
++
+\underbrace{
+\begin{pmatrix} -0.0441 \\ 0.0669 \end{pmatrix}
+}_{C_0}
++
+\begin{pmatrix} \epsilon_{R,t} \\ \epsilon_{r,t} \end{pmatrix}
+$$
+
+### (c)
+
+Montando o VAR com a mesma metodologia do item anterior, mas agora para $ S_t $ e $\Delta r_t $:
+```{r}
+
+# Isolando St e drt, criando as séries com lag para avaliar as restrições do modelo de valor presente:
+
+dados_pvm <- d %>%
+  dplyr::select(St, drt) 
+  
+
+dados_lags <- dados_pvm %>%
+   mutate(
+    St.l1 = lag(St, 1),
+    St.l2 = lag(St, 2),
+    drt.l1 = lag(drt, 1),
+    drt.l2 = lag(drt, 2)
+  )
+  
+
+# Repetindo o processo para verificar se a seleção dos lags está correta 
+selecao_pvm <- VARselect(na.omit(dados_pvm), lag.max = 10, type = "const")
+cat('\n Retorno dos critérios \n')
+selecao_pvm$selection
+
+p_pvm <- 2
+
+# VAR(p) com as novas variáveis
+var_pvm <- VAR(na.omit(dados_pvm), p = p_pvm, type = "const", season = NULL, exogen = NULL)
+
+#Resultados
+print(summary(var_pvm))
+
+```
+Para verificar se o modelo atende às condições de um Modelo de Valor Presente (PVM), há de se verificar se ele atende à seguinte especificação, sendo $\delta$ a taxa de desconto intertemporal:
+
+$$S_t + \Delta r_t = \frac{1}{\delta} S_{t-1} + \mu_t$$
+No caso de um VAR(2), soma-se as duas equações a seguir para se chegar na original por manipulação algébrica:
+$$
+\begin{align*}
+S_t &= a_1 S_{t-1} + a_2 S_{t-2} + b_1 \Delta r_{t-1} + b_2 \Delta r_{t-2} + u_{1t} \\
+\Delta r_t &= c_1 S_{t-1} + c_2 S_{t-2} + d_1 \Delta r_{t-1} + d_2 \Delta r_{t-2} + u_{2t}
+\end{align*}
+$$
+Ou seja, devemos testar as seguintes restrições no teste de Wald: 
+$$H_0 : \begin{cases} a_1 + c_1 = \frac{1}{\delta} \\ a_2 + c_2 = 0 \\ b_1 + d_1 = 0 \\ b_2 + d_2 = 0 \end{cases} $$
+
+```{r}
+#------------------------------ Setup do teste de Wald------------------------------
+# Dado p=2:
+eqSt <- St ~ St.l1 + St.l2 + drt.l1 + drt.l2
+eqdrt <- drt ~ St.l1 + St.l2 + drt.l1 + drt.l2
+
+# Juntando  as equações em uma lista:
+eq_sistema <- list(eqSt, eqdrt)
+
+# Estimando o sistema com seemingly unrelated (SUR):
+var_sur <- systemfit(eq_sistema, data = na.omit(dados_lags), method = "OLS")
+
+# Adotando um delta (desconto intertemporal) arbitrário entre 0.9 e 0.99
+delta <- 0.91 
+inv_delta <- 1 / delta
+
+# Legenda de coeficientes:
+# a1 = eq1_St.l1,  c1 = eq2_St.l1
+# a2 = eq1_St.l2,  c2 = eq2_St.l2
+# b1 = eq1_drt.l1, d1 = eq2_drt.l1
+# b2 = eq1_drt.l2, d2 = eq2_drt.l2
+
+# 2*p = 4 restrições do teste a ser feito:
+restricoes_pvm <- c(
+  paste("eq1_St.l1 + eq2_St.l1 =", inv_delta), # a1 + c1 = 1/delta
+  "eq1_St.l2 + eq2_St.l2 = 0",                 # a2 + c2 = 0
+  "eq1_drt.l1 + eq2_drt.l1 = 0",               # b1 + d1 = 0
+  "eq1_drt.l2 + eq2_drt.l2 = 0"                # b2 + d2 = 0
+)
+
+# ----------------------Executar e interpretar o Teste de Wald -----------------------
+teste_wald_pvm <- linearHypothesis(var_sur, restricoes_pvm)
+cat("\nTeste de Wald para as condições do PVM (H0: Restrições são válidas):\n")
+print(teste_wald_pvm)
+
+
+```
+Como o p-valor (Pr(>F)) > 0.05, temos um teste F em que a hipótese nula não é rejeitada, isto é, as restrições do PVM são estatisticamente significantes, portanto válidas.
+
+### (d)
+
+```{r d1}
+
+d_vecm_ordered <- d %>%
+  dplyr::select('rt', 'Rt') %>%
+  drop_na()
+
+teste_johansen_ordered <- ca.jo(d_vecm_ordered, 
+                                type = "trace", 
+                                K = p_const, 
+                                ecdet = "const", 
+                                spec = "longrun")
+
+var_from_vecm <- vec2var(teste_johansen_ordered, r = rc)
+
+
+irf_vecm <- irf(var_from_vecm, n.ahead = 20, boot = TRUE, ci = 0.95)
+
+plot_irf_gg <- function(irf_obj, impulse_var, response_var) {
+  
+  irf_data <- data.frame(
+    Estimate = irf_obj$irf[[impulse_var]][, response_var],
+    Lower = irf_obj$Lower[[impulse_var]][, response_var],
+    Upper = irf_obj$Upper[[impulse_var]][, response_var]
+  ) %>%
+    mutate(Horizon = 0:(n() - 1))
+  
+  gg <- ggplot(irf_data, aes(x = Horizon)) +
+    geom_ribbon(aes(ymin = Lower, ymax = Upper), fill = "red", alpha = 0.2, linetype = "dotted") +
+    geom_line(aes(y = Estimate), color = "black", linetype = "dotdash") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+    labs(y = paste("Resposta:", response_var),
+         x = "Horizonte (Períodos)",
+         title = NULL) + 
+    theme_minimal()
+  
+  return(gg) 
+}
+
+p_rt_rt <- plot_irf_gg(irf_vecm, impulse_var = "rt", response_var = "rt")
+p_rt_Rt <- plot_irf_gg(irf_vecm, impulse_var = "rt", response_var = "Rt")
+p_Rt_rt <- plot_irf_gg(irf_vecm, impulse_var = "Rt", response_var = "rt")
+p_Rt_Rt <- plot_irf_gg(irf_vecm, impulse_var = "Rt", response_var = "Rt")
+
+cat("\n--- Funções de Impulso-Resposta (IRF) Interativas ---\n")
+
+plot1 <- ggplotly(p_rt_rt)
+plot2 <- ggplotly(p_rt_Rt)
+plot3 <- ggplotly(p_Rt_rt)
+plot4 <- ggplotly(p_Rt_Rt)
+
+
+subplot_rt <- subplot(plot1, plot2, nrows = 2, shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Impulso em 'rt' (Taxa Curta)", y = 0.98)) 
+
+
+subplot_Rt <- subplot(plot3, plot4, nrows = 2, shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Impulso em 'Rt' (Taxa Longa)", y = 0.98)) 
+
+
+tagList(
+  subplot_rt,
+  subplot_Rt,
+)
+```
+
+O primeiro gráfico mede a resposta das variáveis a um choque na taxa curta ($r_t$), note que tanto a taxa curta ($r_t$) quanto a longa ($R_t$) sofrem impacto significativo e maior que 0.5 mesmo nos maiores lags.
+
+Já o segundo gráfico mede a resposta das variáveis a um choque na taxa longa ($R_t$), note que enquanto o resultado de $R_t$ é significativamente afetado em todos os lags, o impacto na taxa curta ($r_t$) não é estatisticamente diferente de 0 nos primeiros lags, e só nos lags mais longos o impacto passa a ser estatisticamente significativo e diferente de 0.
+
+Esses resultados estão em linha com a abordagem adotada de utilizar $r_t$ como a variável mais exógena.
+
+```{r d2}
+fevd_vecm <- fevd(var_from_vecm, n.ahead = 20)
+cat("\n--- Decomposição da Variância do Erro de Previsão (FEVD) ---\n")
+print(fevd_vecm)
+
+```
+
+Os resultados da Decomposição de Cholesky parecem corroborar a ideia de usar o $r_t$ como variável mais exógena. Analisando primeiramente $r_t$, percebemos que, como esperado, o erro é explicado 100% por $r_t$ no primeiro lag, o que é coerente com a nossa abordagem, considerando $r_t$ como variável mais exógena. Note, porém, que no lag 20 aproximadamente 83% do erro em $r_t$ é explicado pelo próprio $r_t$, o que dá indícios de que o $r_t$ é de fato pouco impactado por $R_t$, corroborando a ideia de ser a variável mais exógena.
+
+Já analisando os erros de $R_t$, percebemos que, apesar de no início o erro ser explicado em maior parte pelo próprio $R_t$, do lag 6 para frente a decomposição do erro mais ou menos se estabiliza, com $r_t$ explicando cerca de 63% do erro. Essa conclusão indica que o $R_t$ parece ter características de uma variável endógena, novamente confirmando a coerência da abordagem sugerida.
+
+Essa conclusão faz sentido, uma vez que a taxa de juros de curto prazo ($r_t$) costuma ser determinada pelo "policy maker" (Banco Central). Apesar de este costumar ter alguma espécie de modelagem para auxiliar na política monetária, a definição final acaba sendo, de certa forma, discricionária. Dessa forma, acaba sendo de fato uma variável mais exógena, por ter uma correlação clara com a taxa de longo prazo ($R_t$). Esta, por outro lado, é resultado da expectativa do mercado para a economia, que é diretamente influenciada pela política monetária empregada pelo "policy maker" no curto prazo.
+
+
+### (e)
+
+Uma vez que nos itens anteriores se confirmou a presença de vetor de cointegração para a série, seguiremos os mesmos passos de construção do VECM para a resolução a seguir, verificando a cada passo se o modelo é adequado para a subamostra dos dados.
+
+1. Preparar Dados em Nível (1871-2000)
+
+```{r}
+d_levels_2000_year <- d_raw %>%
+  mutate(Year = 1871 + row_number() - 1) %>%
+  filter(Year <= 2000) %>%
+  dplyr::select(Year,'rt' = Short_R, 'Rt' = Long_R)
+head(d_levels_2000_year)
+
+d_levels_2000 <- d_levels_2000_year %>%
+  dplyr::select(rt, Rt)
+
+head(d_levels_2000)
+
+plot_rt <- plot_ly(d_levels_2000_year, x = ~Year, y = ~rt, 
+                   type = "scatter", mode = "lines", name = "rt (Taxa Curta)")
+
+plot_Rt <- plot_ly(d_levels_2000_year, x = ~Year, y = ~Rt, 
+                   type = "scatter", mode = "lines", name = "Rt (Taxa Longa)")
+
+plot_series <- subplot(plot_rt, plot_Rt, nrows = 2, 
+                             shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Séries em Nível (Amostra 1871-2000)", y = 0.98),
+         xaxis = list(title = "Ano"),
+         showlegend = TRUE)
+
+plot_series
+```
+
+Com base nos gráficos acima, observa-se que não há uma tendência linear determinística clara, mas tampouco as taxas variam em torno de zero. Dessa forma, entende-se que o modelo pode ser especificado como type = "const", o que, assim como na letra (b), se motiva pela justificativa teórica fornecida pelo Modelo de Valor Presente (Handout 01.4, Eq. 7), que postula que o spread ($S_t = R_t - r_t$) — que é a própria relação de cointegração — é estacionário em torno de uma média constante, $c_n$, e esta constante $c_n$ tem a interpretação econômica direta de um prêmio de risco (risk premium).
+
+
+2. Selecionar Ordem do VAR (p) para o VECM
+
+```{r}
+cat("--- Seleção de Lags (VAR em Nível) para Amostra até 2000 ---\n")
+vs_levels_2000 <- VARselect(d_levels_2000, lag.max = 12, type = "const")
+print(vs_levels_2000$selection)
+```
+Por hora, opta-se pelo modelo $p = 2$ por ser mais parcimonioso.
+
+```{r}
+K_vecm_e <- 2 # K = p = 2 (baseado no HQ/SC)
+cat(paste("\nUsando K=", K_vecm_e, "(que corresponde a p=", K_vecm_e, " no VAR em nível) para o VECM.\n"))
+```
+
+
+3. Estimar o VECM (Teste de Johansen)
+
+```{r}
+cat("\n--- Teste de Johansen (Amostra até 2000) ---\n")
+
+# Utiliza-se K=2 e ecdet="const" (para o prêmio de risco, como no item b)
+tj_2000 <- ca.jo(d_levels_2000, 
+                 type = "trace", 
+                 K = K_vecm_e, 
+                 ecdet = "const", 
+                 spec = "longrun")
+
+summary(tj_2000)
+```
+O teste de Johansen para a subamostra até 2000, assim como na amostra completa, indica a existência de r = 1 vetor de cointegração. Isso confirma que a metodologia VECM é a correta.
+
+4. Converter VECM para VAR e rodar Cholesky
+
+```{r}
+rc_e <- 1
+
+cat("\n--- Análise de Impulso-Resposta e FEVD (Amostra até 2000) ---\n")
+# Convertendo o VECM em sua representação VAR (em níveis)
+var_from_vecm_2000 <- vec2var(tj_2000, r = rc_e)
+
+cat("\n--- Teste de Autocorrelação Serial para o VECM (p=2) ---\n")
+# É preciso do VAR em nível para testar os resíduos
+print(serial.test(var_from_vecm_2000, lags.pt = 10, type = "PT.asymptotic"))
+
+# Funções de Impulso-Resposta (IRF)
+irf_vecm_2000 <- irf(var_from_vecm_2000, n.ahead = 20, boot = TRUE, ci = 0.95)
+
+# Decomposição da Variância do Erro (FEVD)
+fevd_vecm_2000 <- fevd(var_from_vecm_2000, n.ahead = 20)
+
+print(fevd_vecm_2000)
+```
+Observando os resultados do Portmanteau Test (asymptotic), conclúi-se que os resíduos do modelo são "ruído branco" (não há autocorrelação serial), uma vez que p-value = 0.2315 > 0.05. Isso significa que a escolha de $p = 2$ (ou $K = 2$ no ca.jo) é suficiente para capturar a dinâmica de autocorrelação do sistema. O VECM para a subamostra até 2000 está bem especificado, gerando, portanto, resultados confiáveis.
+
+Analisando agora os resultados econômicos do modelo, nota-se que a taxa curta (rt) é altamente exógena nesta subamostra. Ela se move primariamente por conta própria e não é muito afetada por choques na taxa longa, uma vez que no horizonte de 1 defasagem temos que 100% de seu comportamento é explicado por ela mesma e no horizonte de 20 defasagens, 82% de seu comportamento ainda é explicado por ela mesma. Isso é consistente com a teoria do item (d) de que rt é a variável de política monetária (definida pelo Banco Central). Por outro lado, a taxa longa (Rt) é altamente endógena. A maior parte de sua variância (62%) no longo prazo é explicada por choques na taxa curta enquanto que no curto prazo 40% de seu comportamento já é explicado por rt.
+
+Assim, entende-se que os resultados seguem em linha com os observados para a amostra completa.
+
+5. Plotar as Funções de Impulso-Resposta
+
+```{r}
+# Reutilizando a função de plot 'plot_irf_gg' do item (d)
+plot_irf_gg <- function(irf_obj, impulse_var, response_var) {
+  
+  irf_data <- data.frame(
+    Estimate = irf_obj$irf[[impulse_var]][, response_var],
+    Lower = irf_obj$Lower[[impulse_var]][, response_var],
+    Upper = irf_obj$Upper[[impulse_var]][, response_var]
+  ) %>%
+    mutate(Horizon = 0:(n() - 1))
+  
+  gg <- ggplot(irf_data, aes(x = Horizon)) +
+    geom_ribbon(aes(ymin = Lower, ymax = Upper), fill = "red", alpha = 0.2, linetype = "dotted") +
+    geom_line(aes(y = Estimate), color = "black", linetype = "dotdash") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+    labs(y = paste("Resposta:", response_var),
+         x = "Horizonte (Períodos)",
+         title = NULL) + 
+    theme_minimal()
+  
+  return(gg) 
+}
+
+# Gerar os plots
+p_rt_rt_e <- plot_irf_gg(irf_vecm_2000, impulse_var = "rt", response_var = "rt")
+p_rt_Rt_e <- plot_irf_gg(irf_vecm_2000, impulse_var = "rt", response_var = "Rt")
+p_Rt_rt_e <- plot_irf_gg(irf_vecm_2000, impulse_var = "Rt", response_var = "rt")
+p_Rt_Rt_e <- plot_irf_gg(irf_vecm_2000, impulse_var = "Rt", response_var = "Rt")
+
+# Exibir os plots
+cat("\n--- Funções de Impulso-Resposta (Amostra até 2000) ---\n")
+
+subplot_rt_e <- subplot(p_rt_rt_e, p_rt_Rt_e, nrows = 2, shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Impulso em 'rt' (Amostra 2000)", y = 0.98)) 
+
+subplot_Rt_e <- subplot(p_Rt_rt_e, p_Rt_Rt_e, nrows = 2, shareX = TRUE, titleY = TRUE, margin = 0.05) %>%
+  layout(title = list(text = "Impulso em 'Rt' (Amostra 2000)", y = 0.98)) 
+
+tagList(
+  subplot_rt_e,
+  subplot_Rt_e
+)
+```
+
+
+Com base nos gráficos de Impulso-Resposta (IRF) para a subamostra (até 2000), os resultados corroboram fortemente a abordagem de Cholesky que utiliza $r_t$ como a variável mais exógena.
+
+Analisando primeiramente a linha inferior (Impulso em '$Rt$'), o gráfico da "Resposta de rt a Rt" mostra que um choque inesperado na taxa longa ($R_t$) gera respostas de baixa magnitude na taxa curta ($r_t$), sendo estatísticamente zero até o Horizonte 4, uma vez que o intervalo de confiança (a área vermelha) contém a linha do zero nos primeiros horizontes de tempo.
+
+Já analisando a linha superior (Impulso em '$rt$'), vemos o oposto. Um choque na taxa curta ($r_t$) gera uma resposta positiva, estatisticamente significativa e persistente na taxa longa ('Resposta de Rt a rt').
+
+Essa conclusão, de que $r_t$ afeta $R_t$, mas $R_t$ não afeta de forma significativa $r_t$, valida a ordenação de Cholesky. A interpretação econômica é a mesma do item (d) mencionada anteriormente: a taxa de juros de curto prazo ($r_t$) atua como a variável de política monetária (definida pelo Banco Central) e, portanto, é mais exógena. Um choque nessa política tem um impacto claro e duradouro sobre as expectativas do mercado, que formam a taxa longa ($R_t$). Por outro lado, um choque nas expectativas de mercado ($R_t$) não parece, nesta amostra, forçar uma reação da autoridade monetária, confirmando o caráter mais exógeno de $r_t$.
+
+Uma vez definido o modelo mais adequado e os parâmetros de melhor ajuste, é aplicada a função predict() para projetar os dados de 2001 a 2012 a partir do modelo treinado.
+
+```{r}
+previsoes <- predict(var_from_vecm_2000, n.ahead = 12, ci = 0.95)
+print(previsoes)
+```
+
+Selecionando as séries real e projetada para o período de 2001 a 2012, plotam-se os gráficos e as estatísticas descritivas das séries para que se possa analisar os resultados.
+
+```{r}
+# 1. Carregar dados em NÍVEL observados (2001-2012)
+# d_raw foi carregado no início do item (e)
+dados_observados_niveis <- d_raw %>%
+  mutate(Year = 1871 + row_number() - 1) %>%
+  filter(Year >= 2001 & Year <= 2012) %>%
+  dplyr::select(Year, 'rt' = Short_R, 'Rt' = Long_R)
+
+# Criar objetos Time Series (ts) para os dados observados
+obs_rt <- ts(dados_observados_niveis$rt, start = 2001, frequency = 1)
+obs_Rt <- ts(dados_observados_niveis$Rt, start = 2001, frequency = 1)
+
+## Análise Gráfica
+# 2. Taxa Longa (Rt)
+fcst_Rt <- previsoes$fcst$Rt
+ts_fcst_Rt <- ts(fcst_Rt, start = 2001, frequency = 1)
+
+plot(obs_Rt,
+     ylim = range(obs_Rt, fcst_Rt, na.rm = TRUE),
+     main = "Previsão vs. Observado: Rt (2001-2012)",
+     ylab = "Rt (Taxa Longa - Nível)",
+     xlab = "Ano",
+     lwd = 2, col = "black")
+
+lines(ts_fcst_Rt[, "fcst"], col = "blue", lwd = 2)
+lines(ts_fcst_Rt[, "lower"], col = "blue", lty = 2, lwd = 1)
+lines(ts_fcst_Rt[, "upper"], col = "blue", lty = 2, lwd = 1)
+
+legend("topleft",
+       legend = c("Rt Observado", "Rt Previsto (VECM)", "IC 95%"),
+       col = c("black", "blue", "blue"),
+       lty = c(1, 1, 2),
+       lwd = c(2, 2, 1),
+       bty = "n")
+
+# 3. Taxa Curta (rt)
+fcst_rt <- previsoes$fcst$rt
+ts_fcst_rt <- ts(fcst_rt, start = 2001, frequency = 1)
+
+plot(obs_rt,
+     ylim = range(obs_rt, fcst_rt, na.rm = TRUE),
+     main = "Previsão vs. Observado: rt (2001-2012)",
+     ylab = "rt (Taxa Curta - Nível)",
+     xlab = "Ano",
+     lwd = 2, col = "black")
+
+lines(ts_fcst_rt[, "fcst"], col = "red", lwd = 2)
+lines(ts_fcst_rt[, "lower"], col = "red", lty = 2, lwd = 1)
+lines(ts_fcst_rt[, "upper"], col = "red", lty = 2, lwd = 1)
+
+legend("topleft",
+       legend = c("rt Observado", "rt Previsto (VECM)", "IC 95%"),
+       col = c("black", "red", "red"),
+       lty = c(1, 1, 2),
+       lwd = c(2, 2, 1),
+       bty = "n")
+
+
+## 4. Análise das Estatísticas Descritivas (Níveis)
+comparacao_df <- data.frame(
+  Rt_Observado = as.numeric(obs_Rt),
+  Rt_Previsto  = as.numeric(ts_fcst_Rt[, "fcst"]),
+  rt_Observado = as.numeric(obs_rt),
+  rt_Previsto  = as.numeric(ts_fcst_rt[, "fcst"])
+)
+
+stats_func <- function(x) {
+  c(
+    Media = mean(x, na.rm = TRUE),
+    Desvio_Pad = sd(x, na.rm = TRUE),
+    Minimo = min(x, na.rm = TRUE),
+    Maximo = max(x, na.rm = TRUE)
+  )
+}
+
+estatisticas <- sapply(comparacao_df, stats_func)
+
+print("Estatísticas das Séries (Níveis)")
+print(t(estatisticas))
+```
+
+A partir da análise gráfica e das estatísticas descritivas, percebe-se uma drástica diferença de comportamento entre os dados projetados pelo VECM e os dados reais de 2001 a 2012, com os dados projetados exibindo uma estabilidade muito maior.
+
+Isso é confirmado pela comparação do desvio padrão e dos valores extremos (Mínimo, Máximo): as séries observadas são visivelmente mais voláteis do que as séries previstas. A rt observada (Desvio Padrão = 1.91) é quase 100 vezes mais volátil que a sua previsão (Desvio Padrão = 0.02). Essa discrepância é esperada, uma vez que o modelo VECM foi treinado com dados de 1871 a 2000 e sua previsão converge para a média de longo prazo estimada nesse período. Ele não poderia antecipar os choques estruturais da crise financeira de 2008 e a subsequente política de "Zero Lower Bound", por exemplo.
+
+Outra análise importante é a comparação das médias, a qual revela uma falha severa do modelo fora da amostra: A média prevista para Rt (6.21) e rt (6.22) é drasticamente diferente da média realmente observada no período (Rt = 3.92 e rt = 2.41). Isso indica que a "normalidade" (a média de longo prazo) do período pós-2000 é estruturalmente diferente daquela do período 1871-2000.
+
+Além disso, a análise dos intervalos de confiança (IC) melhor expõe a quebra estrutural. Ao contrário do que se poderia esperar, as observações reais não permanecem dentro do IC de 95%. O gráfico da Taxa Curta (rt) mostra que a série observada (preta) mergulha para perto de zero, posicionando-se abaixo do limite inferior do IC (linha pontilhada vermelha). O mesmo não ocorre com a Taxa Longa (Rt), contudo, ela tangencia o limite inferior do intervalo de confiança. Isso demonstra que os choques reais pós-2008 não foram apenas "grandes", mas sim eventos estatisticamente "impossíveis" (com menos de 5% de chance) sob a ótica da distribuição de previsão do modelo treinado até 2000.
