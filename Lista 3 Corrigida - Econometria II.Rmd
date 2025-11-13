@@ -115,7 +115,7 @@ adf<-list(
 lapply(adf,summary)
 ```
 
-Com o modelo sem intercepto, não se rejeita a hipótese nula de existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível (parâmetro de regressão à média, por simplificação). Logo, assumiremos $R_t$ e $r_t$ não-estacionárias e $S_t$ e $\Delta_t$ estacionárias.
+Com o modelo sem intercepto, não se rejeita a hipótese nula de existência de raiz unitária tanto para a taxa longa ($R_t$) quanto para a curta ($r_t$). Contudo, tanto o spread ($S_t$) quanto a diferença na taxa curta ($\Delta_t$) apresentam parâmetro significativo no primeiro lag em nível (parâmetro de regressão à média, por simplificação). Logo, assumiremos $R_t$ e $r_t$ não-estacionárias e $S_t$ e $\Delta r_t$ estacionárias.
 
 ### (b)
 
@@ -322,7 +322,7 @@ Ou seja, devemos testar as seguintes restrições no teste de Wald:
 $$H_0 : \begin{cases} a_1 + c_1 = \frac{1}{\delta} \\ a_2 + c_2 = 0 \\ b_1 + d_1 = 0 \\ b_2 + d_2 = 0 \end{cases} $$
 
 ```{r}
-#------------------------------ Setup do teste de Wald------------------------------
+#------------------------------ Setup do teste de Wald ------------------------------
 # Dado p=2:
 eqSt <- St ~ St.l1 + St.l2 + drt.l1 + drt.l2
 eqdrt <- drt ~ St.l1 + St.l2 + drt.l1 + drt.l2
@@ -351,7 +351,7 @@ restricoes_pvm <- c(
   "eq1_drt.l2 + eq2_drt.l2 = 0"                # b2 + d2 = 0
 )
 
-# ----------------------Executar e interpretar o Teste de Wald -----------------------
+# ---------------------- Executar e interpretar o Teste de Wald -----------------------
 teste_wald_pvm <- linearHypothesis(var_sur, restricoes_pvm)
 cat("\nTeste de Wald para as condições do PVM (H0: Restrições são válidas):\n")
 print(teste_wald_pvm)
@@ -444,7 +444,7 @@ Os resultados da Decomposição de Cholesky parecem corroborar a ideia de usar o
 
 Já analisando os erros de $R_t$, percebemos que, apesar de no início o erro ser explicado em maior parte pelo próprio $R_t$, do lag 6 para frente a decomposição do erro mais ou menos se estabiliza, com $r_t$ explicando cerca de 63% do erro. Essa conclusão indica que o $R_t$ parece ter características de uma variável endógena, novamente confirmando a coerência da abordagem sugerida.
 
-Essa conclusão faz sentido, uma vez que a taxa de juros de curto prazo ($r_t$) costuma ser determinada pelo "policy maker" (Banco Central). Apesar de este costumar ter alguma espécie de modelagem para auxiliar na política monetária, a definição final acaba sendo, de certa forma, discricionária. Dessa forma, acaba sendo de fato uma variável mais exógena, por ter uma correlação clara com a taxa de longo prazo ($R_t$). Esta, por outro lado, é resultado da expectativa do mercado para a economia, que é diretamente influenciada pela política monetária empregada pelo "policy maker" no curto prazo.
+Essa conclusão faz sentido, uma vez que a taxa de juros de curto prazo ($r_t$) costuma ser direcionada pelo "policy maker" (Banco Central). Apesar de este costumar ter alguma espécie de modelagem para auxiliar na política monetária, a definição final da taxa basica acaba sendo, de certa forma, discricionária, conferindo certo grau de exogeneidade aos juros de curto prazo. Dessa forma, acaba sendo de fato uma variável mais exógena, por ter uma correlação clara com a taxa de longo prazo ($R_t$). Esta, por outro lado, é resultado da expectativa do mercado para a economia, que é diretamente influenciada pela política monetária.
 
 
 ### (e)
@@ -494,7 +494,7 @@ Por hora, opta-se pelo modelo $p = 2$ por ser mais parcimonioso.
 
 ```{r}
 K_vecm_e <- 2 # K = p = 2 (baseado no HQ/SC)
-cat(paste("\nUsando K=", K_vecm_e, "(que corresponde a p=", K_vecm_e, " no VAR em nível) para o VECM.\n"))
+cat(paste("\nUsando K=", K_vecm_e, "(que corresponde a p =", K_vecm_e, " no VAR em nível) para o VECM.\n"))
 ```
 
 
@@ -537,7 +537,7 @@ print(fevd_vecm_2000)
 ```
 Observando os resultados do Portmanteau Test (asymptotic), conclúi-se que os resíduos do modelo são "ruído branco" (não há autocorrelação serial), uma vez que p-value = 0.2315 > 0.05. Isso significa que a escolha de $p = 2$ (ou $K = 2$ no ca.jo) é suficiente para capturar a dinâmica de autocorrelação do sistema. O VECM para a subamostra até 2000 está bem especificado, gerando, portanto, resultados confiáveis.
 
-Analisando agora os resultados econômicos do modelo, nota-se que a taxa curta (rt) é altamente exógena nesta subamostra. Ela se move primariamente por conta própria e não é muito afetada por choques na taxa longa, uma vez que no horizonte de 1 defasagem temos que 100% de seu comportamento é explicado por ela mesma e no horizonte de 20 defasagens, 82% de seu comportamento ainda é explicado por ela mesma. Isso é consistente com a teoria do item (d) de que rt é a variável de política monetária (definida pelo Banco Central). Por outro lado, a taxa longa (Rt) é altamente endógena. A maior parte de sua variância (62%) no longo prazo é explicada por choques na taxa curta enquanto que no curto prazo 40% de seu comportamento já é explicado por rt.
+Analisando agora os resultados econômicos do modelo, nota-se que a taxa curta (rt) é altamente exógena nesta subamostra. Ela se move primariamente por conta própria e não é muito afetada por choques na taxa longa, uma vez que no horizonte de 1 defasagem temos que 100% de seu comportamento é explicado por ela mesma e no horizonte de 20 defasagens, 82% de seu comportamento ainda é explicado por ela mesma. Isso é consistente com a teoria do item (d) de que rt é a variável direcionada pela política monetária. Por outro lado, a taxa longa (Rt) é altamente endógena. A maior parte de sua variância (62%) no longo prazo é explicada por choques na taxa curta enquanto que no curto prazo 40% de seu comportamento já é explicado por rt.
 
 Assim, entende-se que os resultados seguem em linha com os observados para a amostra completa.
 
@@ -594,7 +594,7 @@ Analisando primeiramente a linha inferior (Impulso em '$Rt$'), o gráfico da "Re
 
 Já analisando a linha superior (Impulso em '$rt$'), vemos o oposto. Um choque na taxa curta ($r_t$) gera uma resposta positiva, estatisticamente significativa e persistente na taxa longa ('Resposta de Rt a rt').
 
-Essa conclusão, de que $r_t$ afeta $R_t$, mas $R_t$ não afeta de forma significativa $r_t$, valida a ordenação de Cholesky. A interpretação econômica é a mesma do item (d) mencionada anteriormente: a taxa de juros de curto prazo ($r_t$) atua como a variável de política monetária (definida pelo Banco Central) e, portanto, é mais exógena. Um choque nessa política tem um impacto claro e duradouro sobre as expectativas do mercado, que formam a taxa longa ($R_t$). Por outro lado, um choque nas expectativas de mercado ($R_t$) não parece, nesta amostra, forçar uma reação da autoridade monetária, confirmando o caráter mais exógeno de $r_t$.
+Essa conclusão, de que $r_t$ afeta $R_t$, mas $R_t$ não afeta de forma significativa $r_t$, valida a ordenação de Cholesky. Reforçando a interpretação econômica mencionada anteriormente. Um choque nessa política tem um impacto claro e duradouro sobre as expectativas do mercado, que formam a taxa longa ($R_t$). Por outro lado, um choque nas expectativas de mercado ($R_t$) não parece, nesta amostra, forçar uma reação da autoridade monetária, confirmando o caráter mais exógeno de $r_t$.
 
 Uma vez definido o modelo mais adequado e os parâmetros de melhor ajuste, é aplicada a função predict() para projetar os dados de 2001 a 2012 a partir do modelo treinado.
 
