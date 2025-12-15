@@ -1,0 +1,1 @@
+#### Este repositório compila alguns trabalhos realizados ao longo da disciplina de Econometria II da FGV EPGE. Os principais arquivos são o "lista2-ADFG" e o "Lista3-ADFG" (Rmd ou HTML) e consistem da construção e interpretação de modelos econométricos para análise de séries temporais.
